@@ -1,0 +1,39 @@
+package cli
+
+import (
+	"github.com/spf13/cobra"
+
+	"github.com/unsafe9/clutch/internal/adapter"
+	"github.com/unsafe9/clutch/internal/adapter/github"
+	"github.com/unsafe9/clutch/internal/config"
+	"github.com/unsafe9/clutch/internal/store/file"
+)
+
+// newBoardCmd builds `clutch board <task-id>`: show a task's board.
+func newBoardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "board <task-id>",
+		Short: "Show a task's board (principles/design/adrs/appraisals)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runBoard,
+	}
+}
+
+func runBoard(cmd *cobra.Command, args []string) error {
+	// Every command path passes the caller-agnostic safety gate first.
+	if err := gate(cmd, "board.read"); err != nil {
+		return err
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	backend := file.New(cfg.StoreLocation)
+	var tracker adapter.IssueTracker = github.New() // wave2: issue enrichment
+	_ = tracker
+	board, err := backend.Get(args[0])
+	if err != nil {
+		return err
+	}
+	return emitBoard(cmd, board)
+}
