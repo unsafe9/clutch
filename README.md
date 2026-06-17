@@ -120,6 +120,41 @@ and may split along this manager/executor seam.
 Projections of the same task store — tracker, session view, roadmap / idea-bank,
 "waiting on you" queue — never separate sources of truth.
 
+## Invariants
+
+Architecture rules that hold across every component, settled up front so they are
+not re-litigated per feature.
+
+- **The store is the only authority; the CLI is its sole gateway.** Ground truth is
+  the Task + Board store — not a CLI session, not an agent's judgment. One `clutch`
+  CLI owns every read and mutation of that store, and with it all determinism,
+  invariants, and the safety floor; agents are stateless, and their judgment becomes
+  true only once written back through the CLI. Forced by two principles at once:
+  *deterministic-first* (authority living in appraisal would be recomputed and
+  non-reproducible) and *agent-neutral* (authority living in a skill would let a host
+  swap change behavior). Litmus — anything mechanically enforceable, stateful, or
+  safety-bearing is a CLI command; only irreducible judgment is a skill.
+- **Two skill kinds: orchestrators are few, capabilities are many.** Orchestrators
+  own a workflow verb and its state transitions (classify, plan, review, manage) —
+  clutch-specific, stateless, writing back through the CLI, added only to justify a
+  genuinely new flow. Capabilities are domain-general expertise and review lenses
+  (abstraction, boundaries, concurrency, protocol, …) — owning no flow and no state,
+  invoked by an orchestrator like a library, and living in a shared host-neutral
+  library that clutch *references* rather than absorbs (reuse outside clutch,
+  no-lock-in at the skill layer). Litmus — a new flow or decision-point is an
+  orchestrator (rare); a new lens or body of expertise is a capability (expected to
+  grow).
+- **The CLI is a public substrate, not a private interface.** Internal orchestrators,
+  external capability skills, and foreign systems are all clients of one CLI
+  contract — at once authority gateway, data-provision layer (the tool-consumable
+  projection), and capability adapter; so *agent-neutral* generalizes to
+  system-neutral. This requires: machine output (stable, schema-versioned) kept
+  distinct from human/TTY output; a caller-agnostic safety gate; orthogonal,
+  pipeable primitives over mega-commands; and further surfaces (MCP, file emit,
+  dashboards) as thin projections of the one store, never parallel truth. The shape
+  is adopted now; public-API stability is promised only once a real external
+  consumer exists.
+
 ## Modes
 
 Every task runs in one of two modes — clutch's autonomy policy made concrete.
