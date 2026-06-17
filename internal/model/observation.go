@@ -1,9 +1,14 @@
 package model
 
-// Signature is a durable representation signature used to anchor a stable task
-// id. The same signature resolves to the same id across scans (e.g. repo
-// identity + branch, or an issue link). It lives in model so the pure
-// correlate package can name it without importing the store.
+// Signature is a single durable representation signature used to anchor a stable
+// task id. The same signature resolves to the same id across scans (e.g. repo
+// identity + branch, or an issue link). It lives in model so the pure correlate
+// package can name it without importing the store.
+//
+// A Signature is ONE durable key, not a bundle: a task id may have MANY
+// signatures attached (one per representation that anchors it). Multi-
+// representation anchoring is done through the registry (Attach), NOT by adding
+// more fields to a single Signature.
 type Signature struct {
 	// Repo is the durable repo identity (not a path).
 	Repo string `json:"repo,omitempty"`
@@ -16,13 +21,14 @@ type Signature struct {
 // GitObservation is a raw git/gh discovery record for one repo checkout. It is
 // an input to correlation, not a projected representation.
 type GitObservation struct {
-	Repo      RepoRef       `json:"repo"`
-	Branches  []Branch      `json:"branches"`
-	Worktrees []Worktree    `json:"worktrees"`
-	Base      string        `json:"base"`
-	Commits   CommitSummary `json:"commits"`
-	PRs       []PullRequest `json:"prs"`
-	Issues    []Issue       `json:"issues"`
+	Repo      RepoRef    `json:"repo"`
+	Branches  []Branch   `json:"branches"`
+	Worktrees []Worktree `json:"worktrees"`
+	// Base now lives per-Branch (Branches carry it); there is no observation-
+	// level base.
+	Commits CommitSummary `json:"commits"`
+	PRs     []PullRequest `json:"prs"`
+	Issues  []Issue       `json:"issues"`
 }
 
 // FSObservation is a raw filesystem discovery record: a repo and the worktrees

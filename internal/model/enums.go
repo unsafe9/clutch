@@ -57,3 +57,27 @@ const (
 	LinkAppraisal  LinkMethod = "appraisal"
 	LinkDeclared   LinkMethod = "declared"
 )
+
+// UnresolvedKind categorizes an Unresolved ambiguity flag. The set is
+// extensible — consumers MUST tolerate kinds they do not recognize.
+type UnresolvedKind string
+
+// UnresolvedKind values.
+const (
+	UnresolvedLineage  UnresolvedKind = "lineage"
+	UnresolvedRelation UnresolvedKind = "relation"
+	UnresolvedLink     UnresolvedKind = "link"
+	UnresolvedIdentity UnresolvedKind = "identity"
+	UnresolvedSession  UnresolvedKind = "session"
+)
+
+// AppraisalKind categorizes a cached Appraisal result. The set is extensible —
+// consumers MUST tolerate kinds they do not recognize.
+type AppraisalKind string
+
+// AppraisalKind values.
+const (
+	AppraisalClassification AppraisalKind = "classification"
+	AppraisalRelation       AppraisalKind = "relation"
+	AppraisalLink           AppraisalKind = "link"
+)

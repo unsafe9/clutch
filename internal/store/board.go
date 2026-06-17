@@ -25,13 +25,33 @@ type BoardStore interface {
 
 // IDRegistry is the port that anchors stable clutch task ids to durable
 // representation signatures. Same signature → same id across scans. It lives
-// beside the board store. Its method set matches correlate.IDResolver so the
-// file backend can be wired straight into the pure correlation core.
+// beside the board store. One id may have MANY signatures attached (one per
+// representation that anchors it) — multi-representation anchoring is done here,
+// via Attach.
+//
+// IDRegistry satisfies correlate.IDResolver (Resolve/Mint/Attach/Merge) and adds
+// the registry-maintenance op Retire, which the pure correlation core does not
+// need.
+//
+// Vanished-representation behavior: when a previously-anchored signature stops
+// appearing in scans, the id is RETAINED (board history is the knowledge
+// pillar) — the representation simply drops from the projection, and the task
+// may become `stale`. Split (one id discovered to be two tasks) is deferred:
+// there is no method for it yet.
 type IDRegistry interface {
 	// Resolve returns the existing id for sig, or ok=false if none is anchored.
 	Resolve(sig model.Signature) (id string, ok bool, err error)
 	// Mint anchors a new stable id to sig and returns it.
 	Mint(sig model.Signature) (id string, err error)
+	// Attach anchors an additional signature to an existing id (also covers
+	// aliasing a second signature onto the same task).
+	Attach(id string, sig model.Signature) error
+	// Merge folds mergeID into keepID once two ids are found to be one task and
+	// returns the surviving id.
+	Merge(keepID, mergeID string) (id string, err error)
+	// Retire marks an id as gone. The id is NOT deleted (board knowledge
+	// persists) — it is only marked retired.
+	Retire(id string) error
 }
 
 // Query is a cross-board query for project knowledge.

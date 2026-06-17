@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // BoardRef locates a task's board within a BoardStore backend.
 type BoardRef struct {
 	// Backend names the BoardStore backend (e.g. "file").
@@ -39,12 +41,17 @@ type Decision struct {
 
 // Appraisal is a cached result of a classify / inferred-relation computation.
 type Appraisal struct {
-	// Kind is the appraisal kind (e.g. classify, inferred-relation).
-	Kind string `json:"kind"`
-	// Subject is what was appraised (e.g. a task id or representation ref).
-	Subject string `json:"subject"`
+	// Kind is the appraisal kind.
+	Kind AppraisalKind `json:"kind"`
+	// Subject is the representation this appraisal concerns (within-task RepRef).
+	Subject RepRef `json:"subject"`
 	// Result is the appraisal outcome.
 	Result string `json:"result"`
 	// Confidence in [0,1].
 	Confidence float64 `json:"confidence"`
+	// InputFingerprint identifies the inputs this appraisal was computed over,
+	// so a cached appraisal can be invalidated when its inputs change.
+	InputFingerprint string `json:"input_fingerprint"`
+	// ComputedAt is when this appraisal was computed.
+	ComputedAt time.Time `json:"computed_at"`
 }

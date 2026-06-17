@@ -2,8 +2,16 @@ package model
 
 import "time"
 
-// SchemaVersion is the version of the machine (--json) projection contract.
-// Bump it on any breaking change to the envelope or Task shape.
+// SchemaVersion is the version of the machine (--json) projection contract,
+// formatted MAJOR.MINOR.
+//
+// Versioning policy:
+//   - MAJOR bumps on a breaking change: a field removed, renamed, or retyped, or
+//     a field's semantics changed.
+//   - MINOR bumps on an additive change: a new field.
+//   - Consumers MUST ignore unknown fields and MUST NOT assume any field beyond
+//     their pinned MAJOR.
+//   - Pre-1.0 (0.x) is unstable: while MAJOR is 0, a MINOR bump MAY break.
 const SchemaVersion = "0.1"
 
 // ProjectionEnvelope is the stable, schema-versioned machine contract emitted

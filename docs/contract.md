@@ -2,6 +2,9 @@
 
 > Authoritative spec for the Wave-0 scaffold. The Go types under `internal/model`
 > and this document agree field-for-field; if they ever diverge, that is a bug.
+> Wave 3's golden e2e MUST include a JSON snapshot/schema golden test asserting
+> the emitted envelope/Task shape matches this contract, so the "doc ⇄ code
+> agree" promise is mechanically enforced rather than maintained by hand.
 > Audience: an LLM or engineer wiring against clutch. Read intent first.
 
 ## Intent
@@ -15,10 +18,12 @@ the ambiguous remainder, and only its results are written back through the CLI.
 
 ---
 
-## Task projection model — 3 provenance classes
+## Task projection model — 3 classes by derivation & persistence
 
-A Task is one object whose fields fall into three classes by *where they come
-from* and *whether they persist*. This grouping is the core design. (Go:
+A Task is one object whose fields fall into three classes by *how they are
+derived* and *whether they persist*. This grouping is the core design.
+`provenance` (clutch-initiated / git-detected) is a single **field within Class
+①** — it is not the axis the classes are cut along. (Go:
 `internal/model/task.go`.)
 
 ### Class ① Identity & policy — PERSISTED, stable across scans
@@ -39,30 +44,53 @@ Lives in the store / id-registry. Set by clutch and the planner/agent layer.
 ### Class ② Representations — DERIVED, recomputed each scan, NEVER persisted
 
 Pure deterministic projection of git/fs/session state. **Carries zero LLM.**
+Every representation carries a `ref` (a `RepRef`, see below) so Class-③ links,
+unresolved flags, and board appraisals can name which representation they
+concern.
 
 | field         | type           | shape                                                   |
 |---------------|----------------|---------------------------------------------------------|
-| `repos`       | []RepoRef      | `{identity, path, remote}` — clones/checkouts spanned    |
-| `branches`    | []Branch       | `{repo, name, head, upstream, ahead, behind}`           |
-| `worktrees`   | []Worktree     | `{path, branch, repo}`                                   |
-| `base`        | string         | fork-point ref                                          |
+| `repos`       | []RepoRef      | `{ref, identity, path, remote}` — clones/checkouts spanned |
+| `branches`    | []Branch       | `{ref, repo, name, head, base, upstream, ahead, behind, integration}` |
+| `worktrees`   | []Worktree     | `{ref, path, branch, repo}`                             |
 | `commits`     | CommitSummary  | `{head, count}` — summary, NOT a full commit list       |
-| `prs`         | []PullRequest  | `{host, number, url, state, draft, checks}`             |
-| `issues`      | []Issue        | `{tracker, key, url, state}` — external (jira/github)   |
-| `integration` | Integration    | enum: unmerged / merged / conflicts / behind            |
-| `sessions`    | []Session      | `{host, cwd, branch?, last_activity, running}` — host = claude-code\|codex |
+| `prs`         | []PullRequest  | `{ref, host, number, url, state, draft, checks}`        |
+| `issues`      | []Issue        | `{ref, tracker, key, url, state}` — external (jira/github) |
+| `sessions`    | []Session      | `{ref, host, cwd, branch?, last_activity, running}` — host = claude-code\|codex |
+
+`base` (fork-point ref) and `integration` (enum: unmerged / merged / conflicts /
+behind) are **per-Branch**, not Task-level: one task spans multiple branches/repos
+with divergent fork-points and merge states, so a single Task-level scalar cannot
+express them. There is **no** Task-level integration rollup — a consumer derives
+one from the per-branch values if it wants one.
 
 > **PROVISIONAL (TODO wave1-b):** `Session` fields are not final; they will be
 > fixed after the CC/Codex on-disk session formats are reverse-engineered.
 
+#### RepRef — within-task representation key
+
+`RepRef` is an **opaque, stable, within-task** string key naming one
+representation, so a `Link`, `Unresolved` flag, or `Appraisal` can point at the
+exact representation it concerns. It is stable within a single task projection;
+it is **not** a global identifier. Key scheme:
+
+| representation | `ref` form                     |
+|----------------|--------------------------------|
+| RepoRef        | `repo:<identity>`              |
+| Branch         | `branch:<repo-identity>/<name>` |
+| Worktree       | `worktree:<path>`             |
+| PullRequest    | `pr:<host>#<number>`          |
+| Issue          | `issue:<tracker>/<key>`       |
+| Session        | `session:<host>/<cwd>`        |
+
 ### Class ③ Relations & correlation — MIXED: derived + declared + appraisal
 
-| field        | type          | shape / provenance                                         |
+| field        | type          | shape / derivation                                         |
 |--------------|---------------|------------------------------------------------------------|
-| `lineage`    | Lineage       | `{parents[]}` — parent task ids (derived from `base` where possible, else declared) |
+| `lineage`    | Lineage       | `{parents[]}` — parent task ids (derived from a branch's `base` where possible, else declared) |
 | `relations`  | Relations     | `{depends[], blocks[]}` — task-id DAG; declared or appraised |
-| `links`      | []Link        | per representation-link: `{method, confidence}`            |
-| `unresolved` | []Unresolved  | `{kind, detail, task_id?}` — ambiguity flags fed to the `classify` orchestrator later |
+| `links`      | []Link        | per representation-link: `{subject, method, confidence}` — `subject` is the RepRef this link concerns |
+| `unresolved` | []Unresolved  | `{kind, detail, refs?, task_id?}` — `kind` is an `UnresolvedKind`; `refs` are the RepRef(s) the ambiguity concerns; fed to the `classify` orchestrator later |
 
 `Link.method` is one of `convention | appraisal | declared` (LinkMethod enum).
 Convention/declared imply confidence 1.0; appraisal < 1.0.
@@ -83,13 +111,18 @@ String-typed; the JSON wire form is exactly the listed value. (Go:
 `internal/model/enums.go`.) These values are part of the machine contract — keep
 them stable.
 
-| enum        | values                                                                 |
-|-------------|------------------------------------------------------------------------|
-| Lifecycle   | `idea` `planned` `active` `review` `merged` `done` `stale` `superseded` |
-| Mode        | `cruise` `steer`                                                        |
-| Provenance  | `clutch-initiated` `git-detected`                                       |
-| Integration | `unmerged` `merged` `conflicts` `behind`                                |
-| LinkMethod  | `convention` `appraisal` `declared`                                     |
+| enum           | values                                                                 |
+|----------------|------------------------------------------------------------------------|
+| Lifecycle      | `idea` `planned` `active` `review` `merged` `done` `stale` `superseded` |
+| Mode           | `cruise` `steer`                                                        |
+| Provenance     | `clutch-initiated` `git-detected`                                       |
+| Integration    | `unmerged` `merged` `conflicts` `behind`                                |
+| LinkMethod     | `convention` `appraisal` `declared`                                     |
+| UnresolvedKind | `lineage` `relation` `link` `identity` `session` — **extensible**       |
+| AppraisalKind  | `classification` `relation` `link` — **extensible**                    |
+
+`UnresolvedKind` and `AppraisalKind` sets are **extensible**: consumers MUST
+tolerate kinds they do not recognize.
 
 ---
 
@@ -103,7 +136,7 @@ Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 | `principles` | string        | work principles for the task                              |
 | `design`     | string        | evolving design that converges to final; decisions overwrite/accumulate; engineering altitude, NO code |
 | `adrs`       | []ADR         | `{decision, context, alternatives[], consequence}`        |
-| `appraisals` | []Appraisal   | `{kind, subject, result, confidence}` — cache of classify / inferred-relation results (avoid recomputation) |
+| `appraisals` | []Appraisal   | `{kind, subject, result, confidence, input_fingerprint, computed_at}` — cache of classify / inferred-relation results; `kind` is an `AppraisalKind`, `subject` is the RepRef appraised, `input_fingerprint` + `computed_at` let a cached appraisal be invalidated when its inputs change |
 
 ### BoardStore port
 
@@ -123,17 +156,34 @@ Default backend = out-of-repo file store (`internal/store/file`).
 
 ## Identity registry (IDRegistry port)
 
-Anchors a stable clutch `id` to a durable **representation signature** so the
-same signature yields the same id across scans. Lives beside the board store.
-(Go: `internal/store/board.go`; signature in `internal/model/observation.go`.)
+Anchors a stable clutch `id` to durable **representation signatures** so the same
+signature yields the same id across scans. Lives beside the board store. (Go:
+`internal/store/board.go`; signature in `internal/model/observation.go`.)
 
 - `Signature{repo?, branch?, issue_link?}` — e.g. repo identity + branch, or an
-  issue link. One anchoring strategy populated.
+  issue link. One anchoring strategy populated. A `Signature` is **one** durable
+  key, not a bundle.
 - `Resolve(sig) -> (id, ok, err)` — existing id, or `ok=false` if none anchored.
 - `Mint(sig) -> (id, err)` — anchor a new stable id to `sig`.
+- `Attach(id, sig) -> err` — anchor an **additional** signature to an existing id
+  (also covers aliasing). This is how **multi-representation anchoring** works:
+  one id may have MANY signatures (one per representation), via the registry, not
+  via a multi-field `Signature`.
+- `Merge(keepID, mergeID) -> (id, err)` — two ids found to be one task; returns
+  the surviving id.
+- `Retire(id) -> err` — task gone; the id is **NOT deleted** (board knowledge
+  persists), only marked retired.
 
-`store.IDRegistry`'s method set matches `correlate.IDResolver` exactly, so the
-file backend wires straight into the pure correlation core (see Dependency rule).
+**Vanished-representation behavior:** when a previously-anchored signature stops
+appearing in scans, the id is **retained** (board history is the knowledge
+pillar), the representation drops from the projection, and the task may become
+`stale`. **Split** (one id discovered to be two tasks) is **deferred/open** — no
+method exists for it yet.
+
+`store.IDRegistry` satisfies `correlate.IDResolver` (Resolve/Mint/Attach/Merge)
+and adds the maintenance op `Retire` (NOT in `IDResolver`, since the pure
+correlation core does not perform registry maintenance). So the file backend
+wires straight into the pure correlation core (see Dependency rule).
 
 ---
 
@@ -157,7 +207,22 @@ it. (Go: `internal/model/projection.go`.)
 }
 ```
 
-`schema_version` is bumped on any breaking change to the envelope or Task shape.
+`schema_version` follows the policy below.
+
+---
+
+## Schema versioning policy
+
+`schema_version` is `MAJOR.MINOR`:
+
+- **MAJOR** bumps on a **breaking** change: a field removed, renamed, or retyped,
+  or a field's semantics changed.
+- **MINOR** bumps on an **additive** change: a new field.
+- Consumers **MUST ignore unknown fields** and **MUST NOT** assume any field
+  beyond their pinned MAJOR.
+- **Pre-1.0 (`0.x`) is unstable**: while MAJOR is `0`, a MINOR bump MAY break.
+
+Current: `schema_version = "0.1"`. (Go: `internal/model/projection.go`.)
 
 ---
 
@@ -190,8 +255,14 @@ it. (Go: `internal/model/projection.go`.)
 - `internal/model` imports **no other internal package** (stdlib `time` only).
 - `internal/correlate` imports **ONLY** `internal/model` — pure, no IO. If it
   would need a non-model type, that type belongs in `model` (hence observation
-  DTOs and `Signature` live there; the id resolver is a consumer-defined
-  interface over model types).
+  DTOs and `Signature` live there); anything else is a **consumer-defined
+  interface over model types**. Two such seams exist:
+  - `IDResolver{Resolve, Mint, Attach, Merge}` — id lifecycle for the core.
+  - `AppraisalReader{Appraisals(taskID) -> []Appraisal}` — reads persisted
+    appraisals back so a cached classify/relation result is reused, not
+    recomputed.
+  Entry point: `Correlate(obs Observations, ids IDResolver, appraisals AppraisalReader) -> ([]Task, error)`.
+  The file backend satisfies both seams (asserted in `internal/cli/wire.go`).
 - `internal/discover/*`, `internal/store/*`, `internal/adapter/*` import `model`
   (+ their own port).
 - `internal/cli` (and `cmd/clutch`) is the **composition root** — the only place

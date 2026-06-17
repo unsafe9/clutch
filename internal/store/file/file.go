@@ -73,3 +73,27 @@ func (s *Store) Mint(sig model.Signature) (id string, err error) {
 	// TODO(wave1-c): allocate a new id and anchor it to sig.
 	panic("not implemented")
 }
+
+// Attach implements store.IDRegistry.
+func (s *Store) Attach(id string, sig model.Signature) error {
+	// TODO(wave1-c): anchor an additional signature to an existing id.
+	panic("not implemented")
+}
+
+// Merge implements store.IDRegistry.
+func (s *Store) Merge(keepID, mergeID string) (id string, err error) {
+	// TODO(wave1-c): fold mergeID into keepID and return the survivor.
+	panic("not implemented")
+}
+
+// Retire implements store.IDRegistry.
+func (s *Store) Retire(id string) error {
+	// TODO(wave1-c): mark id retired without deleting board knowledge.
+	panic("not implemented")
+}
+
+// Appraisals implements correlate.AppraisalReader.
+func (s *Store) Appraisals(taskID string) ([]model.Appraisal, error) {
+	// TODO(wave1-c): read cached appraisals from <root>/boards/<taskID>.json.
+	panic("not implemented")
+}
