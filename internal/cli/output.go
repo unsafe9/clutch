@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -28,20 +31,70 @@ func emitBoard(cmd *cobra.Command, b *model.Board) error {
 	return emitHumanBoard(cmd.OutOrStdout(), b)
 }
 
-// emitJSON writes the stable, schema-versioned machine contract.
+// emitJSON writes the stable, schema-versioned machine contract: deterministic
+// two-space-indented JSON plus a trailing newline. It MUST stay deterministic —
+// no timestamps or other non-deterministic content injected here.
 func emitJSON(w io.Writer, v any) error {
-	// TODO(wave1-d): deterministic, indented JSON encoding.
-	panic("not implemented")
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(b); err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, "\n")
+	return err
 }
 
-// emitHumanEnvelope writes a human/TTY rendering of a projection.
+// emitHumanEnvelope writes a compact TTY table of tasks plus a one-line scan
+// summary.
 func emitHumanEnvelope(w io.Writer, env model.ProjectionEnvelope) error {
-	// TODO(wave1-d): TTY table rendering.
-	panic("not implemented")
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tTITLE\tLIFECYCLE\tMODE\tREPRESENTATIONS")
+	for _, t := range env.Tasks {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			t.ID, t.Title, t.Lifecycle, t.Mode, rollup(t))
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	s := env.Diagnostics.ScanStats
+	_, err := fmt.Fprintf(w,
+		"scan: %d repos, %d worktrees, %d sessions, %d tasks in %dms\n",
+		s.ReposScanned, s.Worktrees, s.Sessions, s.TasksProjected, s.DurationMS)
+	return err
 }
 
-// emitHumanBoard writes a human/TTY rendering of a board.
+// rollup is a short branches/PRs/sessions count summary for a task.
+func rollup(t model.Task) string {
+	return fmt.Sprintf("%db/%dpr/%ds", len(t.Branches), len(t.PRs), len(t.Sessions))
+}
+
+// emitHumanBoard writes a readable, sectioned TTY rendering of a board.
 func emitHumanBoard(w io.Writer, b *model.Board) error {
-	// TODO(wave1-d): TTY board rendering.
-	panic("not implemented")
+	if _, err := fmt.Fprintf(w, "Principles:\n%s\n\n", b.Principles); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Design:\n%s\n\n", b.Design); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, "ADRs:\n"); err != nil {
+		return err
+	}
+	for _, a := range b.ADRs {
+		if _, err := fmt.Fprintf(w, "  - %s\n    context: %s\n    consequence: %s\n",
+			a.Decision, a.Context, a.Consequence); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(w, "\nAppraisals:\n"); err != nil {
+		return err
+	}
+	for _, ap := range b.Appraisals {
+		if _, err := fmt.Fprintf(w, "  - [%s] %s -> %s (%.2f)\n",
+			ap.Kind, ap.Subject, ap.Result, ap.Confidence); err != nil {
+			return err
+		}
+	}
+	return nil
 }

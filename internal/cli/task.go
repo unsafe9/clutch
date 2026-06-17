@@ -1,6 +1,12 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/unsafe9/clutch/internal/model"
+)
 
 // newTaskCmd builds `clutch task <id>`: show a single task.
 func newTaskCmd() *cobra.Command {
@@ -13,8 +19,14 @@ func newTaskCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// TODO(wave1-d): filter env.Tasks to args[0].
-			return emitEnvelope(cmd, env)
+			id := args[0]
+			for _, t := range env.Tasks {
+				if t.ID == id {
+					env.Tasks = []model.Task{t}
+					return emitEnvelope(cmd, env)
+				}
+			}
+			return fmt.Errorf("task %q not found", id)
 		},
 	}
 }

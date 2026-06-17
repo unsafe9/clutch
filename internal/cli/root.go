@@ -10,6 +10,7 @@ import "github.com/spf13/cobra"
 var (
 	cfgPath    string
 	jsonOutput bool
+	assumeYes  bool
 )
 
 // NewRootCmd builds the root `clutch` command and wires its subcommands.
@@ -26,6 +27,8 @@ func NewRootCmd() *cobra.Command {
 		"path to clutch config")
 	root.PersistentFlags().BoolVar(&jsonOutput, "json", false,
 		"emit machine (JSON) output instead of human/TTY output")
+	root.PersistentFlags().BoolVar(&assumeYes, "yes", false,
+		"confirm mutating actions non-interactively (safety gate)")
 	root.AddCommand(newScanCmd(), newTasksCmd(), newTaskCmd(), newBoardCmd())
 	return root
 }
