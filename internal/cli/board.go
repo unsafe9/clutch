@@ -9,14 +9,23 @@ import (
 	"github.com/unsafe9/clutch/internal/store/file"
 )
 
-// newBoardCmd builds `clutch board <task-id>`: show a task's board.
+// newBoardCmd builds `clutch board <task-id>`: show a task's board. The mutating
+// board write commands are wired as subcommands; each passes the safety gate.
 func newBoardCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "board <task-id>",
 		Short: "Show a task's board (principles/design/adrs/appraisals)",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runBoard,
 	}
+	cmd.AddCommand(
+		newSetPrinciplesCmd(),
+		newSetDesignCmd(),
+		newAddDecisionCmd(),
+		newAddADRCmd(),
+		newAppraiseCmd(),
+	)
+	return cmd
 }
 
 func runBoard(cmd *cobra.Command, args []string) error {

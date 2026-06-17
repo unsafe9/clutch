@@ -31,6 +31,20 @@ func emitBoard(cmd *cobra.Command, b *model.Board) error {
 	return emitHumanBoard(cmd.OutOrStdout(), b)
 }
 
+// emitConfirm reports a completed write. In machine mode it emits a small stable
+// JSON object; in human mode a one-line message. Honors the --json/human split.
+func emitConfirm(cmd *cobra.Command, taskID, action string) error {
+	if jsonOutput {
+		return emitJSON(cmd.OutOrStdout(), map[string]string{
+			"task_id": taskID,
+			"action":  action,
+			"status":  "ok",
+		})
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", action, taskID)
+	return err
+}
+
 // emitJSON writes the stable, schema-versioned machine contract: deterministic
 // two-space-indented JSON plus a trailing newline. It MUST stay deterministic —
 // no timestamps or other non-deterministic content injected here.
