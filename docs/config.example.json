@@ -1,0 +1,10 @@
+{
+  "search_roots": [
+    "/Users/you/work",
+    "/Users/you/oss"
+  ],
+  "repo_mapping": {
+    "github.com/unsafe9/clutch": "/Users/you/work/clutch"
+  },
+  "store_location": "/Users/you/.local/state/clutch"
+}
