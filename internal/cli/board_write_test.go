@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/unsafe9/clutch/internal/model"
@@ -12,6 +13,7 @@ import (
 func execCmd(t *testing.T, storeDir string, args ...string) (string, error) {
 	t.Helper()
 	t.Setenv("CLUTCH_STORE", storeDir)
+	t.Setenv(confirmEnv, "")
 	// Reset package-level flag globals between invocations.
 	cfgPath, jsonOutput, assumeYes = "", false, false
 
@@ -90,6 +92,14 @@ func TestAppraiseRejectsBadKindAndConfidence(t *testing.T) {
 		"--kind", "link", "--confidence", "1.5", "--yes"); err == nil {
 		t.Fatal("appraise with confidence > 1 = nil, want error")
 	}
+	if _, err := execCmd(t, store, "board", "appraise", "task3",
+		"--kind", "link", "--confidence", "1.0", "--yes"); err == nil {
+		t.Fatal("appraise with confidence == 1.0 = nil, want error")
+	}
+	if _, err := execCmd(t, store, "board", "appraise", "task3",
+		"--kind", "classification", "--result", "bogus", "--confidence", "0.5", "--yes"); err == nil {
+		t.Fatal("appraise classification with non-lifecycle result = nil, want error")
+	}
 }
 
 func TestWriteWithoutYesRejected(t *testing.T) {
@@ -97,5 +107,59 @@ func TestWriteWithoutYesRejected(t *testing.T) {
 
 	if _, err := execCmd(t, store, "board", "set-design", "task4", "-m", "x"); err == nil {
 		t.Fatal("set-design without --yes = nil, want rejection")
+	}
+}
+
+func TestAddDecisionThenReadReflectsIt(t *testing.T) {
+	store := t.TempDir()
+
+	if _, err := execCmd(t, store, "board", "add-decision", "task5",
+		"--summary", "use file store", "--detail", "simplest backend", "--yes"); err != nil {
+		t.Fatalf("add-decision: %v", err)
+	}
+
+	out, err := execCmd(t, store, "board", "task5", "--json")
+	if err != nil {
+		t.Fatalf("board read: %v", err)
+	}
+	var b model.Board
+	if err := json.Unmarshal([]byte(out), &b); err != nil {
+		t.Fatalf("unmarshal board: %v\n%s", err, out)
+	}
+	if !strings.Contains(b.Design, "use file store") || !strings.Contains(b.Design, "simplest backend") {
+		t.Fatalf("design = %q, want decision folded in", b.Design)
+	}
+}
+
+func TestAddADRThenReadReflectsIt(t *testing.T) {
+	store := t.TempDir()
+
+	if _, err := execCmd(t, store, "board", "add-adr", "task6",
+		"--decision", "adopt cobra", "--context", "need a CLI", "--consequence", "one dep", "--yes"); err != nil {
+		t.Fatalf("add-adr: %v", err)
+	}
+
+	out, err := execCmd(t, store, "board", "task6", "--json")
+	if err != nil {
+		t.Fatalf("board read: %v", err)
+	}
+	var b model.Board
+	if err := json.Unmarshal([]byte(out), &b); err != nil {
+		t.Fatalf("unmarshal board: %v\n%s", err, out)
+	}
+	if len(b.ADRs) != 1 || b.ADRs[0].Decision != "adopt cobra" ||
+		b.ADRs[0].Context != "need a CLI" || b.ADRs[0].Consequence != "one dep" {
+		t.Fatalf("adrs = %+v, want one matching ADR", b.ADRs)
+	}
+}
+
+func TestAddDecisionAndADRRequireFlags(t *testing.T) {
+	store := t.TempDir()
+
+	if _, err := execCmd(t, store, "board", "add-decision", "task7", "--yes"); err == nil {
+		t.Fatal("add-decision without --summary = nil, want error")
+	}
+	if _, err := execCmd(t, store, "board", "add-adr", "task7", "--yes"); err == nil {
+		t.Fatal("add-adr without --decision = nil, want error")
 	}
 }

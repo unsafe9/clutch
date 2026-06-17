@@ -70,6 +70,16 @@ func (s *Store) boardPath(taskID string) string {
 	return filepath.Join(s.boardsDir(), taskID+".json")
 }
 
+// validateTaskID rejects ids that are not a single safe path segment, so a board
+// read/write cannot escape boards/ or clobber the registry via path traversal.
+func validateTaskID(taskID string) error {
+	if taskID == "" || taskID == "." || taskID == ".." ||
+		strings.ContainsAny(taskID, "/\\") || filepath.Base(taskID) != taskID {
+		return fmt.Errorf("invalid task id %q", taskID)
+	}
+	return nil
+}
+
 // loadRegistry reads registry.json or returns an empty registry if absent.
 func (s *Store) loadRegistry() registry {
 	r := registry{Sigs: map[string]string{}, Ids: map[string]*idMeta{}}
@@ -103,6 +113,9 @@ func sigKey(sig model.Signature) string {
 // Get implements store.BoardStore. A missing board file yields a zero-value
 // &model.Board{} with nil error (callers expect an empty board, not an error).
 func (s *Store) Get(taskID string) (*model.Board, error) {
+	if err := validateTaskID(taskID); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(s.boardPath(taskID))
 	if os.IsNotExist(err) {
 		return &model.Board{}, nil

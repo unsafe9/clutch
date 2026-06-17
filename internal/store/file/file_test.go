@@ -1,6 +1,8 @@
 package file
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -266,5 +268,40 @@ func TestAppraisalsReadBack(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Result != "feature" || got[0].Subject != model.RepRef("branch:r/main") {
 		t.Fatalf("appraisals = %+v", got)
+	}
+}
+
+func TestTaskIDTraversalRejected(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Seed a registry so we can prove a traversal write does not clobber it.
+	if _, err := s.Mint(model.Signature{Repo: "r", Branch: "main"}); err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	before, err := os.ReadFile(s.registryPath())
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+
+	for _, id := range []string{"../registry", "../../../tmp/evil", "a/b", "..", "."} {
+		if err := s.SetDesign(id, "x"); err == nil {
+			t.Fatalf("SetDesign(%q) = nil, want error", id)
+		}
+		if _, err := s.Get(id); err == nil {
+			t.Fatalf("Get(%q) = nil error, want error", id)
+		}
+	}
+
+	after, err := os.ReadFile(s.registryPath())
+	if err != nil {
+		t.Fatalf("read registry after: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("registry.json was modified by a traversal write")
+	}
+	// No stray file should have escaped the boards dir to <root>/registry.json's sibling.
+	if _, err := os.Stat(filepath.Join(root, "evil.json")); !os.IsNotExist(err) {
+		t.Fatalf("traversal write escaped boards dir")
 	}
 }

@@ -167,11 +167,14 @@ func newAppraiseCmd() *cobra.Command {
 			if err := gate(cmd, "board.write"); err != nil {
 				return err
 			}
-			if confidence < 0 || confidence > 1 {
-				return fmt.Errorf("--confidence must be in [0,1], got %v", confidence)
+			if confidence < 0 || confidence >= 1 {
+				return fmt.Errorf("--confidence must be in [0,1), got %v", confidence)
 			}
 			if !knownAppraisalKind(kind) {
 				return fmt.Errorf("--kind %q is not a known appraisal kind (classification|relation|link)", kind)
+			}
+			if kind == string(model.AppraisalClassification) && !knownLifecycle(result) {
+				return fmt.Errorf("--result %q is not a known lifecycle for a classification appraisal", result)
 			}
 			s, err := openStore()
 			if err != nil {
@@ -194,7 +197,7 @@ func newAppraiseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&kind, "kind", "", "appraisal kind (classification|relation|link)")
 	cmd.Flags().StringVar(&subject, "subject", "", "subject RepRef the appraisal concerns")
 	cmd.Flags().StringVar(&result, "result", "", "appraisal result")
-	cmd.Flags().Float64Var(&confidence, "confidence", 0, "confidence in [0,1]")
+	cmd.Flags().Float64Var(&confidence, "confidence", 0, "confidence in [0,1)")
 	cmd.Flags().StringVar(&fingerprint, "fingerprint", "", "input fingerprint")
 	return cmd
 }
@@ -203,6 +206,17 @@ func newAppraiseCmd() *cobra.Command {
 func knownAppraisalKind(k string) bool {
 	switch model.AppraisalKind(k) {
 	case model.AppraisalClassification, model.AppraisalRelation, model.AppraisalLink:
+		return true
+	}
+	return false
+}
+
+// knownLifecycle reports whether r is a recognized model.Lifecycle value.
+func knownLifecycle(r string) bool {
+	switch model.Lifecycle(r) {
+	case model.LifecycleIdea, model.LifecyclePlanned, model.LifecycleActive,
+		model.LifecycleReview, model.LifecycleMerged, model.LifecycleDone,
+		model.LifecycleStale, model.LifecycleSuperseded:
 		return true
 	}
 	return false
