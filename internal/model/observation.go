@@ -38,9 +38,9 @@ type FSObservation struct {
 	Worktrees []Worktree `json:"worktrees"`
 }
 
-// SessionObservation is a raw agent-session discovery record.
-//
-// TODO(wave1-b): PROVISIONAL shape pending session-format reverse.
+// SessionObservation is a raw agent-session discovery record. Its Session shape
+// is finalized against the reverse-engineered host formats
+// (docs/session-format.md).
 type SessionObservation struct {
 	Session Session `json:"session"`
 }

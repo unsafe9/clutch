@@ -64,8 +64,9 @@ with divergent fork-points and merge states, so a single Task-level scalar canno
 express them. There is **no** Task-level integration rollup — a consumer derives
 one from the per-branch values if it wants one.
 
-> **PROVISIONAL (TODO wave1-b):** `Session` fields are not final; they will be
-> fixed after the CC/Codex on-disk session formats are reverse-engineered.
+> `Session` fields are **finalized** against the reverse-engineered CC/Codex
+> on-disk formats; see `docs/session-format.md` for the per-host field mapping,
+> cwd recovery, last-activity, and the deterministic `running` rule.
 
 #### RepRef — within-task representation key
 

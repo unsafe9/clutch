@@ -151,10 +151,10 @@ type Issue struct {
 	State   string `json:"state"`
 }
 
-// Session is an agent session touching the task.
-//
-// TODO(wave1-b): fields are PROVISIONAL and will be finalized after the CC and
-// Codex on-disk session formats are reverse-engineered.
+// Session is an agent session touching the task. Fields are finalized against
+// the reverse-engineered CC and Codex on-disk formats (docs/session-format.md):
+// both hosts yield host, cwd, git branch, and a last-activity timestamp;
+// Running is a deterministic recency derivation (no host lock/pid file exists).
 type Session struct {
 	// Ref is this representation's within-task key (session:<host>/<cwd>).
 	Ref RepRef `json:"ref"`
