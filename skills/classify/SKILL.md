@@ -11,10 +11,9 @@ and projects everything it can resolve mechanically; what convention cannot
 settle it surfaces for you. You make those judgments and write them back so a
 later scan reuses them instead of re-deriving them.
 
-Read `docs/contract.md` once before acting — it is the authoritative shape of the
-projection, the appraisal record, and the enums you produce. This skill leads
-with what that contract cannot tell you: when you run, the judgment you owe, and
-the contract you must honor on write.
+This skill carries everything you need to act — what the projection holds, the
+judgment you owe, and the exact appraisal you write back. Work from it directly;
+do not go reading repo docs to recover the contract.
 
 ## Operating assumptions
 
@@ -60,8 +59,9 @@ Reason from the representations the projection gives you (branches, PRs, issues,
 sessions, lineage hints) and the task's board knowledge if relevant. Produce one
 of the three appraisal kinds:
 
-- **classification** → a lifecycle verdict. `result` is a `Lifecycle` enum value
-  (see `docs/contract.md` for the set, e.g. `active`, `review`, `stale`).
+- **classification** → a lifecycle verdict. `result` is one of the lifecycle
+  values: `idea`, `planned`, `active`, `review`, `merged`, `done`, `stale`,
+  `superseded`.
 - **relation** → a task-DAG edge. `result` is `depends:<taskID>` or
   `blocks:<taskID>`.
 - **link** → which representation a link concerns. `result` is the subject ref
@@ -74,24 +74,29 @@ support.
 ## Persisting a verdict — the appraisal contract
 
 Write each verdict as a cached appraisal through the clutch CLI's board appraise
-command. Pass, per item:
+command — the store's only write path:
 
-- the task id it concerns
-- `--kind` one of `classification | relation | link`
-- `--subject` the RepRef the appraisal concerns (from the unresolved `refs`)
-- `--result` per the kind, in the formats above
-- `--confidence` a value in `[0,1)` — appraisal is never 1.0 (that is reserved
-  for deterministic convention/declared verdicts); use it to express how strongly
-  the evidence supports the call
-- `--fingerprint` a hash over the exact inputs you judged from, so the cache can
-  be reused while inputs hold and invalidated when they change
-- confirm the mutation non-interactively (the safety gate requires it)
+```
+clutch board appraise <task-id> --kind <k> --subject <ref> \
+  --result <r> --confidence <c> --fingerprint <fp> --yes
+```
 
-Run `clutch board appraise --help` (and `clutch scan --help`) for the exact flag
-spelling, the confirmation flag, and config selection — point there rather than
-trusting any spelling restated here. The store upserts by `kind`+`subject`: a
-fresh verdict for the same pair replaces the prior one (a recomputation
-supersedes), so re-running is safe.
+- `<task-id>` — the task the appraisal concerns.
+- `--kind` — one of `classification | relation | link`.
+- `--subject` — the RepRef the appraisal concerns, taken from the unresolved
+  `refs`. RepRefs are keyed `repo:<identity>`, `branch:<identity>/<name>`,
+  `worktree:<path>`, `pr:<host>#<number>`, `issue:<tracker>/<key>`, or
+  `session:<host>/<cwd>`.
+- `--result` — per the kind, in the formats above.
+- `--confidence` — a value in `[0,1)`; appraisal is never 1.0 (that is reserved
+  for deterministic convention/declared verdicts). Use it to say how strongly the
+  evidence supports the call.
+- `--fingerprint` — a hash over the exact inputs you judged from, so the cache is
+  reused while those inputs hold and invalidated when they change.
+- `--yes` — the safety gate refuses a mutating command without it.
+
+The store upserts by `kind`+`subject`: a fresh verdict for the same pair replaces
+the prior one (a recomputation supersedes), so re-running is safe.
 
 ## Confidence convention
 
