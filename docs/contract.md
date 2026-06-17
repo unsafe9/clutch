@@ -54,7 +54,7 @@ concern.
 | `branches`    | []Branch       | `{ref, repo, name, head, base, upstream, ahead, behind, integration}` |
 | `worktrees`   | []Worktree     | `{ref, path, branch, repo}`                             |
 | `commits`     | CommitSummary  | `{head, count}` — summary, NOT a full commit list       |
-| `prs`         | []PullRequest  | `{ref, host, number, url, state, draft, checks}`        |
+| `prs`         | []PullRequest  | `{ref, host, number, url, state, draft, checks, review_decision, mergeable}` |
 | `issues`      | []Issue        | `{ref, tracker, key, url, state}` — external (jira/github) |
 | `sessions`    | []Session      | `{ref, host, cwd, branch?, last_activity, running}` — host = claude-code\|codex |
 
@@ -63,6 +63,12 @@ behind) are **per-Branch**, not Task-level: one task spans multiple branches/rep
 with divergent fork-points and merge states, so a single Task-level scalar cannot
 express them. There is **no** Task-level integration rollup — a consumer derives
 one from the per-branch values if it wants one.
+
+A `PullRequest` carries detailed external-review status so the worker can act on
+it: `review_decision` (`approved` / `changes_requested` / `review_required` /
+empty) and `mergeable` (`mergeable` / `conflicting` / `unknown` / empty), in
+addition to `state`, `draft`, and the `checks` rollup. PRs are observed across all
+states (open / merged / closed), not open-only, so the merged-PR signal is visible.
 
 > `Session` fields are **finalized** against the reverse-engineered CC/Codex
 > on-disk formats; see `docs/session-format.md` for the per-host field mapping,

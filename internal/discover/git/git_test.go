@@ -263,6 +263,33 @@ func TestParsePRsBadJSON(t *testing.T) {
 	}
 }
 
+// TestParsePRsDetailedStatus covers the detailed-status mapping: reviewDecision
+// and mergeable normalized from gh's UPPER_CASE to lower_snake_case, and a
+// merged-state PR (only observable now that --state all is queried).
+func TestParsePRsDetailedStatus(t *testing.T) {
+	raw := `[
+      {"number":4,"url":"u4","state":"OPEN","isDraft":false,
+       "reviewDecision":"CHANGES_REQUESTED","mergeable":"CONFLICTING","statusCheckRollup":[]},
+      {"number":5,"url":"u5","state":"OPEN","isDraft":false,
+       "reviewDecision":"APPROVED","mergeable":"MERGEABLE","statusCheckRollup":[]},
+      {"number":6,"url":"u6","state":"MERGED","isDraft":false,
+       "reviewDecision":"","mergeable":"UNKNOWN","statusCheckRollup":[]}
+    ]`
+	prs := parsePRs(raw, "github.com")
+	if len(prs) != 3 {
+		t.Fatalf("len = %d, want 3", len(prs))
+	}
+	if prs[0].ReviewDecision != "changes_requested" || prs[0].Mergeable != "conflicting" {
+		t.Errorf("pr4 = %q/%q, want changes_requested/conflicting", prs[0].ReviewDecision, prs[0].Mergeable)
+	}
+	if prs[1].ReviewDecision != "approved" || prs[1].Mergeable != "mergeable" {
+		t.Errorf("pr5 = %q/%q, want approved/mergeable", prs[1].ReviewDecision, prs[1].Mergeable)
+	}
+	if prs[2].State != "MERGED" || prs[2].ReviewDecision != "" || prs[2].Mergeable != "unknown" {
+		t.Errorf("pr6 = %q/%q/%q, want MERGED/empty/unknown", prs[2].State, prs[2].ReviewDecision, prs[2].Mergeable)
+	}
+}
+
 func TestParsePRsStatesAndChecks(t *testing.T) {
 	// Exercises the full state/checks mapping: merged + closed states, an empty
 	// rollup (no checks → ""), and a pending (in-progress) rollup.

@@ -432,22 +432,30 @@ func applyRelationAppraisal(t *model.Task, a model.Appraisal) {
 // deriveLifecycle is the documented deterministic mapping from integration/PR
 // state to a lifecycle, used before any appraisal override:
 //
-//	any PR merged              → merged
-//	else any PR open, non-draft → review
-//	else any PR open & draft    → planned
-//	else any branch merged      → merged
-//	else any branch has a head  → active
-//	else any commits            → active
-//	else                        → idea
+//	any PR merged                          → merged
+//	else any PR under review               → review
+//	  (open & non-draft, OR review_decision is changes_requested/review_required)
+//	else any PR open & draft               → planned
+//	else any branch merged                 → merged
+//	else any branch has a head             → active
+//	else any commits                       → active
+//	else                                   → idea
+//
+// A review_decision of changes_requested/review_required means external review is
+// in flight and the worker must act on it, so it counts as review even on a draft.
 func deriveLifecycle(t *model.Task) model.Lifecycle {
-	hasOpenDraft, hasOpen, hasMergedPR := false, false, false
+	hasOpenDraft, hasReview, hasMergedPR := false, false, false
 	for _, pr := range t.PRs {
+		switch pr.ReviewDecision {
+		case "changes_requested", "review_required":
+			hasReview = true
+		}
 		switch strings.ToLower(pr.State) {
 		case "open":
 			if pr.Draft {
 				hasOpenDraft = true
 			} else {
-				hasOpen = true
+				hasReview = true
 			}
 		case "merged":
 			hasMergedPR = true
@@ -456,7 +464,7 @@ func deriveLifecycle(t *model.Task) model.Lifecycle {
 	switch {
 	case hasMergedPR:
 		return model.LifecycleMerged
-	case hasOpen:
+	case hasReview:
 		return model.LifecycleReview
 	case hasOpenDraft:
 		return model.LifecyclePlanned

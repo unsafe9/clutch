@@ -262,10 +262,14 @@ func observeWorktrees(repo, identity string) []model.Worktree {
 // ghHost is the only PR host clutch knows how to query (via the `gh` CLI).
 const ghHost = "github.com"
 
-// observePRs fetches open PRs for the repo via `gh pr list`. It skips cleanly
+// observePRs fetches PRs for the repo via `gh pr list`. It skips cleanly
 // (returns nil) when the remote is empty, the identity is not a github.com repo,
 // the `gh` binary is absent, or the command fails (auth/network/non-repo) — so
 // a missing or unauthenticated gh never aborts or pollutes the scan.
+//
+// `--state all` is required because gh lists open PRs by default; without it
+// merged/closed PRs never surface and the merged-PR lifecycle signal is lost.
+// `--limit` bounds the best-effort fetch.
 func observePRs(identity, remote string) []model.PullRequest {
 	if remote == "" || !strings.HasPrefix(identity, ghHost+"/") {
 		return nil
@@ -274,7 +278,8 @@ func observePRs(identity, remote string) []model.PullRequest {
 		return nil
 	}
 	raw, err := run("", "gh", "pr", "list", "-R", identity,
-		"--json", "number,url,state,isDraft,statusCheckRollup")
+		"--state", "all", "--limit", "100",
+		"--json", "number,url,state,isDraft,statusCheckRollup,reviewDecision,mergeable")
 	if err != nil {
 		return nil
 	}
@@ -290,6 +295,8 @@ func parsePRs(raw, host string) []model.PullRequest {
 		URL               string `json:"url"`
 		State             string `json:"state"`
 		IsDraft           bool   `json:"isDraft"`
+		ReviewDecision    string `json:"reviewDecision"`
+		Mergeable         string `json:"mergeable"`
 		StatusCheckRollup []struct {
 			State      string `json:"state"`
 			Conclusion string `json:"conclusion"`
@@ -301,16 +308,24 @@ func parsePRs(raw, host string) []model.PullRequest {
 	var prs []model.PullRequest
 	for _, r := range rows {
 		prs = append(prs, model.PullRequest{
-			Ref:    model.RepRef("pr:" + host + "#" + strconv.Itoa(r.Number)),
-			Host:   host,
-			Number: r.Number,
-			URL:    r.URL,
-			State:  r.State,
-			Draft:  r.IsDraft,
-			Checks: rollupChecks(r.StatusCheckRollup),
+			Ref:            model.RepRef("pr:" + host + "#" + strconv.Itoa(r.Number)),
+			Host:           host,
+			Number:         r.Number,
+			URL:            r.URL,
+			State:          r.State,
+			Draft:          r.IsDraft,
+			Checks:         rollupChecks(r.StatusCheckRollup),
+			ReviewDecision: normEnum(r.ReviewDecision),
+			Mergeable:      normEnum(r.Mergeable),
 		})
 	}
 	return prs
+}
+
+// normEnum normalizes gh's UPPER_CASE enum form to the lower_snake_case value
+// clutch stores (e.g. CHANGES_REQUESTED → changes_requested); empty stays empty.
+func normEnum(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // rollupChecks reduces per-check states into a single coarse label.

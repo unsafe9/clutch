@@ -139,6 +139,11 @@ type PullRequest struct {
 	Draft  bool   `json:"draft"`
 	// Checks is the CI checks rollup state.
 	Checks string `json:"checks"`
+	// ReviewDecision is the PR's review verdict: approved | changes_requested |
+	// review_required | "" (none requested/recorded).
+	ReviewDecision string `json:"review_decision"`
+	// Mergeable is the PR's merge state: mergeable | conflicting | unknown | "".
+	Mergeable string `json:"mergeable"`
 }
 
 // Issue is an external tracker issue (jira/github).

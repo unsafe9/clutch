@@ -321,6 +321,43 @@ func TestLifecycleFromPRState(t *testing.T) {
 	}
 }
 
+func TestLifecycleFromPRDetailedStatus(t *testing.T) {
+	lifecycleFor := func(pr model.PullRequest) model.Lifecycle {
+		ids := newFakeIDs()
+		obs := model.Observations{
+			Git: []model.GitObservation{
+				{
+					Repo:     model.RepoRef{Identity: "acme/app", Path: "/repos/app"},
+					Branches: []model.Branch{{Repo: "acme/app", Name: "feature", Head: "aaa"}},
+					PRs:      []model.PullRequest{pr},
+				},
+			},
+		}
+		got, err := Correlate(obs, ids, fakeAppraisals{})
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		return got[0].Lifecycle
+	}
+
+	// A draft PR with changes_requested is under external review: review, not planned.
+	if got := lifecycleFor(model.PullRequest{Host: "github", Number: 1, State: "open", Draft: true, ReviewDecision: "changes_requested"}); got != model.LifecycleReview {
+		t.Errorf("draft+changes_requested lifecycle = %q, want review", got)
+	}
+	// review_required likewise pulls toward review.
+	if got := lifecycleFor(model.PullRequest{Host: "github", Number: 2, State: "open", Draft: true, ReviewDecision: "review_required"}); got != model.LifecycleReview {
+		t.Errorf("draft+review_required lifecycle = %q, want review", got)
+	}
+	// A plain draft with no review decision stays planned.
+	if got := lifecycleFor(model.PullRequest{Host: "github", Number: 3, State: "open", Draft: true}); got != model.LifecyclePlanned {
+		t.Errorf("plain draft lifecycle = %q, want planned", got)
+	}
+	// A merged PR (now observable via --state all) drives merged.
+	if got := lifecycleFor(model.PullRequest{Host: "github", Number: 4, State: "merged"}); got != model.LifecycleMerged {
+		t.Errorf("merged PR lifecycle = %q, want merged", got)
+	}
+}
+
 func TestDeterministicOrderingAcrossRuns(t *testing.T) {
 	build := func() []model.Task {
 		ids := newFakeIDs()
