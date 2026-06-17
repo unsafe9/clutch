@@ -82,11 +82,14 @@ func TestGoldenE2E(t *testing.T) {
 	}
 
 	// The deterministic correlation anchors one task per (repo-identity, branch)
-	// signature. alpha and its linked worktree alpha-wt are discovered as two
-	// path-derived repo identities; both share the main + feature/x refs, and
-	// beta contributes a single main branch — five branch-scoped tasks in all.
-	if got := len(env.Tasks); got != 5 {
-		t.Fatalf("tasks = %d, want 5\n%s", got, first)
+	// signature. The linked worktree alpha-wt is NOT a separate repo identity: it
+	// resolves back to alpha's main repo (identity-correctness fix) and surfaces
+	// only as a model.Worktree on alpha's task(s). So the task set is exactly the
+	// distinct branch signatures: alpha/main, alpha/feature/x, and beta/main —
+	// three tasks. Pre-fix, alpha-wt minted a phantom local/alpha-wt identity and
+	// re-enumerated alpha's two branches, inflating this to five.
+	if got := len(env.Tasks); got != 3 {
+		t.Fatalf("tasks = %d, want 3\n%s", got, first)
 	}
 
 	// Every task carries a minted id, git-detected provenance, an active

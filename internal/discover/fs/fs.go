@@ -25,29 +25,37 @@ var skipDirs = map[string]bool{
 	".vscode":      true,
 }
 
-// Observe scans roots and returns repo/worktree filesystem observations. It
-// detects repos (a `.git` directory) and linked worktrees (a `.git` FILE that
-// points at a gitdir), using a path-consistent identity (path-based, since the
-// filesystem scan has no remote). A walk error on an individual entry is
-// skipped; an error is returned only when a root cannot be read.
+// Observe scans roots and returns repo/worktree filesystem observations. A
+// primary repo (a `.git` directory) yields a repo observation. A linked worktree
+// (a `.git` FILE pointing at <main>/.git/worktrees/<name>) is NOT emitted as its
+// own repo — it shares the main repo's identity, so it is resolved back to the
+// MAIN repo and surfaced as a model.Worktree attached to that repo's observation.
+// Identity is path-based, since the filesystem scan has no remote. A walk error
+// on an individual entry is skipped; an error is returned only when a root cannot
+// be read.
 func Observe(roots []string) ([]model.FSObservation, error) {
-	var out []model.FSObservation
-	seen := map[string]bool{}
+	// byRepo dedups observations on the RESOLVED repo path (not the walk path):
+	// a linked worktree resolves to its main repo, which may also be scanned in
+	// its own right, so both must fold into one observation rather than emit a
+	// duplicate. order preserves first-seen sequence for a deterministic result.
+	byRepo := map[string]*model.FSObservation{}
+	var order []string
 	for _, root := range roots {
-		obs, err := scanRoot(root, seen)
-		if err != nil {
+		if err := scanRoot(root, byRepo, &order); err != nil {
 			return nil, err
 		}
-		out = append(out, obs...)
+	}
+	out := make([]model.FSObservation, 0, len(order))
+	for _, p := range order {
+		out = append(out, *byRepo[p])
 	}
 	return out, nil
 }
 
-func scanRoot(root string, seen map[string]bool) ([]model.FSObservation, error) {
-	var repos []model.FSObservation
+func scanRoot(root string, byRepo map[string]*model.FSObservation, order *[]string) error {
 	rootClean := filepath.Clean(root)
 
-	err := filepath.WalkDir(rootClean, func(path string, d os.DirEntry, err error) error {
+	return filepath.WalkDir(rootClean, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			if path == rootClean {
 				return err
@@ -69,18 +77,19 @@ func scanRoot(root string, seen map[string]bool) ([]model.FSObservation, error) 
 		if depth(rootClean, path) > maxDepth {
 			return filepath.SkipDir
 		}
-		if obs, ok := detect(path); ok {
-			if !seen[path] {
-				seen[path] = true
-				repos = append(repos, obs)
-			}
+		obs, ok := detect(path)
+		if !ok {
+			return nil
 		}
+		if existing, dup := byRepo[obs.Repo.Path]; dup {
+			existing.Worktrees = append(existing.Worktrees, obs.Worktrees...)
+			return nil
+		}
+		cp := obs
+		byRepo[obs.Repo.Path] = &cp
+		*order = append(*order, obs.Repo.Path)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return repos, nil
 }
 
 // depth returns how many path segments below root path is.
@@ -92,8 +101,10 @@ func depth(root, path string) int {
 	return strings.Count(rel, string(filepath.Separator)) + 1
 }
 
-// detect inspects dir's `.git` marker. A `.git` directory is a repo; a `.git`
-// file pointing at a gitdir is a linked worktree.
+// detect inspects dir's `.git` marker. A `.git` directory is a primary repo. A
+// `.git` file pointing at a gitdir is a linked worktree, which is resolved back
+// to its MAIN repo (so it shares the main repo's identity) and emitted as a
+// model.Worktree attached to that repo, never as its own repo.
 func detect(dir string) (model.FSObservation, bool) {
 	gitPath := filepath.Join(dir, ".git")
 	info, err := os.Lstat(gitPath)
@@ -101,62 +112,79 @@ func detect(dir string) (model.FSObservation, bool) {
 		return model.FSObservation{}, false
 	}
 
-	identity := pathIdentity(dir)
-
 	if info.IsDir() {
+		repo := canonical(dir)
+		identity := pathIdentity(repo)
 		return model.FSObservation{
 			Repo: model.RepoRef{
 				Ref:      model.RepRef("repo:" + identity),
 				Identity: identity,
-				Path:     dir,
+				Path:     repo,
 			},
 		}, true
 	}
 
-	if !gitFilePointsAtGitdir(gitPath) {
+	gitdir := readGitdir(gitPath)
+	if gitdir == "" {
 		return model.FSObservation{}, false
 	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(dir, gitdir)
+	}
+	mainRepo, ok := mainRepoFromGitdir(gitdir)
+	if !ok {
+		return model.FSObservation{}, false
+	}
+	mainRepo = canonical(mainRepo)
+	wt := canonical(dir)
+	identity := pathIdentity(mainRepo)
 	return model.FSObservation{
 		Repo: model.RepoRef{
 			Ref:      model.RepRef("repo:" + identity),
 			Identity: identity,
-			Path:     dir,
+			Path:     mainRepo,
 		},
 		Worktrees: []model.Worktree{{
-			Ref:    model.RepRef("worktree:" + dir),
-			Path:   dir,
+			Ref:    model.RepRef("worktree:" + wt),
+			Path:   wt,
 			Repo:   identity,
-			Branch: worktreeBranch(gitPath),
+			Branch: worktreeHEAD(gitdir),
 		}},
 	}, true
 }
 
-// gitFilePointsAtGitdir reports whether a `.git` file contains a `gitdir:` line.
-func gitFilePointsAtGitdir(gitFile string) bool {
-	f, err := os.Open(gitFile)
-	if err != nil {
-		return false
+// canonical resolves symlinks in path so the fs producer's paths agree with the
+// git producer's (git reports already-canonicalized paths, e.g. /var resolves to
+// /private/var on macOS). Falls back to the input if resolution fails.
+func canonical(path string) string {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if strings.HasPrefix(strings.TrimSpace(sc.Text()), "gitdir:") {
-			return true
-		}
-	}
-	return false
+	return path
 }
 
-// worktreeBranch reads the linked worktree's HEAD ref (the gitdir's HEAD file)
-// and returns its short branch name, or "" if detached/unreadable.
-func worktreeBranch(gitFile string) string {
-	gitdir := readGitdir(gitFile)
-	if gitdir == "" {
-		return ""
+// mainRepoFromGitdir resolves the MAIN repo working directory from a linked
+// worktree's gitdir (<main>/.git/worktrees/<name>). The sibling `commondir` file
+// names the main repo's .git relative to the gitdir; the main working tree is its
+// parent. Returns ok=false if the gitdir is not a worktree gitdir.
+func mainRepoFromGitdir(gitdir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return "", false
 	}
-	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(filepath.Dir(gitFile), gitdir)
+	common := strings.TrimSpace(string(data))
+	if common == "" {
+		return "", false
 	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitdir, common)
+	}
+	return filepath.Dir(filepath.Clean(common)), true
+}
+
+// worktreeHEAD reads the linked worktree's HEAD ref (the gitdir's HEAD file) and
+// returns its short branch name, or "" if detached/unreadable.
+func worktreeHEAD(gitdir string) string {
 	data, err := os.ReadFile(filepath.Join(gitdir, "HEAD"))
 	if err != nil {
 		return ""

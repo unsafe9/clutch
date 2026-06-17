@@ -29,6 +29,22 @@ func Observe(roots []string) ([]model.GitObservation, error) {
 			return nil, err
 		}
 		for _, repo := range repos {
+			// A linked worktree (.git is a FILE pointing into the main repo's
+			// .git/worktrees/<name>) shares the main repo's identity and refs.
+			// Observing it as its own repo would re-enumerate the parent's
+			// branches under a separate path-based identity, spawning phantom
+			// duplicate tasks. Resolve the MAIN repo instead; it surfaces the
+			// worktree via `git worktree list` as a model.Worktree on its task.
+			if main, ok := mainRepoOf(repo); ok {
+				repo = main
+			}
+			// Canonicalize before deduping: a worktree resolves to its main repo
+			// via git's already-canonicalized gitdir, while the main repo may be
+			// walked under a symlinked root (e.g. /var → /private/var on macOS).
+			// Without this the two would not collapse to one observation.
+			if real, err := filepath.EvalSymlinks(repo); err == nil {
+				repo = real
+			}
 			if seen[repo] {
 				continue
 			}
@@ -41,6 +57,37 @@ func Observe(roots []string) ([]model.GitObservation, error) {
 		}
 	}
 	return out, nil
+}
+
+// mainRepoOf reports, for a linked worktree, the working directory of its MAIN
+// repository (resolved from the git common dir). It returns ok=false for a
+// primary repo (whose .git is a directory) or any dir that is not a linked
+// worktree. A primary repo is identified by its .git being a directory, matching
+// the fs discoverer's marker test, so the two producers agree on what counts as
+// a worktree.
+func mainRepoOf(dir string) (string, bool) {
+	info, err := os.Lstat(filepath.Join(dir, ".git"))
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	commonDir, err := git(dir, "rev-parse", "--absolute-git-dir", "--git-common-dir")
+	if err != nil {
+		return "", false
+	}
+	// --absolute-git-dir is the worktree's own gitdir; --git-common-dir is the
+	// main repo's .git. If they are equal this is not a linked worktree.
+	lines := strings.Split(commonDir, "\n")
+	if len(lines) != 2 {
+		return "", false
+	}
+	gitDir, common := strings.TrimSpace(lines[0]), strings.TrimSpace(lines[1])
+	if common == "" || gitDir == common {
+		return "", false
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dir, common)
+	}
+	return filepath.Dir(common), true
 }
 
 // findRepos walks root and returns the absolute paths of every git repository
@@ -212,10 +259,15 @@ func observeWorktrees(repo, identity string) []model.Worktree {
 	return worktrees
 }
 
-// observePRs fetches PRs best-effort via `gh`. On ANY error (gh missing, not a
-// github remote, auth failure, network) it returns nil so the scan continues.
+// ghHost is the only PR host clutch knows how to query (via the `gh` CLI).
+const ghHost = "github.com"
+
+// observePRs fetches open PRs for the repo via `gh pr list`. It skips cleanly
+// (returns nil) when the remote is empty, the identity is not a github.com repo,
+// the `gh` binary is absent, or the command fails (auth/network/non-repo) — so
+// a missing or unauthenticated gh never aborts or pollutes the scan.
 func observePRs(identity, remote string) []model.PullRequest {
-	if remote == "" || !strings.Contains(identity, "github.com/") {
+	if remote == "" || !strings.HasPrefix(identity, ghHost+"/") {
 		return nil
 	}
 	if _, err := exec.LookPath("gh"); err != nil {
@@ -226,7 +278,7 @@ func observePRs(identity, remote string) []model.PullRequest {
 	if err != nil {
 		return nil
 	}
-	return parsePRs(raw, "github.com")
+	return parsePRs(raw, ghHost)
 }
 
 // parsePRs decodes `gh pr list --json ...` output into PullRequest reps. A

@@ -132,6 +132,63 @@ func TestObserve(t *testing.T) {
 	}
 }
 
+// TestLinkedWorktreeNoPhantomRepo asserts the core identity-correctness fix: a
+// linked worktree (whose .git is a FILE pointing into the main repo's
+// .git/worktrees) is NEVER emitted as its own repo observation. It resolves to
+// the MAIN repo and surfaces only as a model.Worktree on the main repo's obs —
+// so its shared branches are not re-enumerated under a phantom identity.
+func TestLinkedWorktreeNoPhantomRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "main")
+	gitCmd(t, root, "init", "-b", "main", "main")
+	writeFile(t, filepath.Join(repo, "a.txt"), "1")
+	gitCmd(t, repo, "add", "a.txt")
+	gitCmd(t, repo, "commit", "-m", "one")
+	gitCmd(t, repo, "branch", "feature/x")
+
+	wt := filepath.Join(root, "main-wt")
+	gitCmd(t, repo, "worktree", "add", wt, "feature/x")
+
+	obs, err := Observe([]string{root})
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	repo = realPath(t, repo)
+	wt = realPath(t, wt)
+
+	// Exactly ONE repo observation (the main repo). The worktree must not appear
+	// as a second observation keyed to its own path.
+	if len(obs) != 1 {
+		t.Fatalf("want 1 repo observation, got %d: %+v", len(obs), obs)
+	}
+	if obs[0].Repo.Path != repo {
+		t.Fatalf("observation path = %q, want main repo %q", obs[0].Repo.Path, repo)
+	}
+	for _, o := range obs {
+		if o.Repo.Path == wt {
+			t.Errorf("linked worktree emitted as its own repo: %q", wt)
+		}
+	}
+
+	// The worktree surfaces as a model.Worktree on the main repo's observation.
+	found := false
+	for _, w := range obs[0].Worktrees {
+		if w.Path == wt {
+			found = true
+			if w.Repo != obs[0].Repo.Identity {
+				t.Errorf("worktree repo = %q, want main identity %q", w.Repo, obs[0].Repo.Identity)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("worktree %q not attached to main repo: %+v", wt, obs[0].Worktrees)
+	}
+}
+
 func TestObserveLocalOnlyIdentity(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -206,6 +263,45 @@ func TestParsePRsBadJSON(t *testing.T) {
 	}
 }
 
+func TestParsePRsStatesAndChecks(t *testing.T) {
+	// Exercises the full state/checks mapping: merged + closed states, an empty
+	// rollup (no checks → ""), and a pending (in-progress) rollup.
+	raw := `[
+      {"number":1,"url":"u1","state":"MERGED","isDraft":false,"statusCheckRollup":[]},
+      {"number":2,"url":"u2","state":"CLOSED","isDraft":false,
+       "statusCheckRollup":[{"state":"IN_PROGRESS","conclusion":""}]},
+      {"number":3,"url":"u3","state":"OPEN","isDraft":false,
+       "statusCheckRollup":[{"state":"COMPLETED","conclusion":"SKIPPED"},
+                            {"state":"COMPLETED","conclusion":"SUCCESS"}]}
+    ]`
+	prs := parsePRs(raw, "github.com")
+	if len(prs) != 3 {
+		t.Fatalf("len = %d, want 3", len(prs))
+	}
+	if prs[0].State != "MERGED" || prs[0].Checks != "" {
+		t.Errorf("pr1 = %q/%q, want MERGED/empty checks", prs[0].State, prs[0].Checks)
+	}
+	if prs[1].Checks != "pending" {
+		t.Errorf("pr2 checks = %q, want pending", prs[1].Checks)
+	}
+	if prs[2].Checks != "success" {
+		t.Errorf("pr3 checks = %q, want success", prs[2].Checks)
+	}
+}
+
+// TestObservePRsSkipsCleanly asserts observePRs never errors and returns nil for
+// the cases it must skip: empty remote, and a non-github identity. (The live
+// github path needs gh + auth + network, so it stays guarded out of unit tests;
+// parsePRs covers the parse/mapping it feeds.)
+func TestObservePRsSkipsCleanly(t *testing.T) {
+	if prs := observePRs("local/solo", ""); prs != nil {
+		t.Errorf("empty remote: want nil, got %v", prs)
+	}
+	if prs := observePRs("gitlab.com/acme/app", "git@gitlab.com:acme/app.git"); prs != nil {
+		t.Errorf("non-github identity: want nil, got %v", prs)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -213,8 +309,20 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// realPath canonicalizes a fixture path the way Observe does (EvalSymlinks), so
+// path comparisons survive /var → /private/var style symlinks (macOS tmpdirs).
+func realPath(t *testing.T, path string) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("EvalSymlinks %s: %v", path, err)
+	}
+	return real
+}
+
 func findRepo(t *testing.T, obs []model.GitObservation, path string) model.GitObservation {
 	t.Helper()
+	path = realPath(t, path)
 	for _, o := range obs {
 		if o.Repo.Path == path {
 			return o

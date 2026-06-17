@@ -136,6 +136,62 @@ func TestRunningThreshold(t *testing.T) {
 	}
 }
 
+// TestRunningRuleEdges nails the boundary semantics of the recency rule:
+// activity exactly at the threshold is running (the rule is `<=`), and a session
+// whose records carry no parseable timestamp (zero LastActivity) is never
+// running rather than spuriously alive.
+func TestRunningRuleEdges(t *testing.T) {
+	dir := t.TempDir()
+	cc := filepath.Join(dir, "cc")
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+
+	// Exactly at the threshold edge -> running (boundary is inclusive).
+	edgeTS := now.Add(-RunningThreshold).Format(time.RFC3339Nano)
+	writeFile(t, filepath.Join(cc, "-edge", "s.jsonl"),
+		`{"type":"user","cwd":"/work/edge","timestamp":"`+edgeTS+`"}`+"\n")
+
+	// A record with a cwd but no timestamp -> zero LastActivity -> not running.
+	writeFile(t, filepath.Join(cc, "-nots", "s.jsonl"),
+		`{"type":"user","cwd":"/work/nots"}`+"\n")
+
+	obs, err := observe(cc, filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edge := find(t, obs, "claude-code", "/work/edge"); !edge.Running {
+		t.Errorf("activity exactly at threshold must be running")
+	}
+	nots := find(t, obs, "claude-code", "/work/nots")
+	if !nots.LastActivity.IsZero() {
+		t.Errorf("no-timestamp session LastActivity = %v, want zero", nots.LastActivity)
+	}
+	if nots.Running {
+		t.Errorf("session with no activity timestamp must not be running")
+	}
+}
+
+// TestArchivedNeverRunningRecent guards the archived exclusion specifically when
+// recency WOULD say running: an archived Codex session with a fresh timestamp is
+// still not running.
+func TestArchivedNeverRunningRecent(t *testing.T) {
+	dir := t.TempDir()
+	archived := filepath.Join(dir, "archived")
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	fresh := now.Format(time.RFC3339Nano)
+	writeFile(t, filepath.Join(archived, "rollout-2026-06-16T11-59-59-z.jsonl"),
+		`{"timestamp":"`+fresh+`","type":"session_meta","payload":{"id":"z","cwd":"/work/arch"}}`+"\n"+
+			`{"timestamp":"`+fresh+`","type":"response_item","payload":{}}`+"\n")
+
+	obs, err := observe(filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), archived, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := find(t, obs, "codex", "/work/arch")
+	if s.Running {
+		t.Errorf("archived session must never be running even with fresh activity")
+	}
+}
+
 func TestMalformedFilesSkipped(t *testing.T) {
 	dir := t.TempDir()
 	cc := filepath.Join(dir, "cc")
