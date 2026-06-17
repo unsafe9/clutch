@@ -18,6 +18,11 @@ type BoardStore interface {
 	AppendDecision(taskID string, d model.Decision) error
 	// AddADR appends an architecture decision record.
 	AddADR(taskID string, adr model.ADR) error
+	// AddAppraisal upserts a cached appraisal: an existing appraisal with the
+	// same Kind+Subject is replaced (a recomputation supersedes it), otherwise
+	// it is appended. board.Appraisals is kept deterministically ordered on
+	// write (by Kind then Subject).
+	AddAppraisal(taskID string, a model.Appraisal) error
 	// Query runs a cross-board query for project knowledge (related tasks /
 	// prior decisions).
 	Query(q Query) (*QueryResult, error)

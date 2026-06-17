@@ -148,6 +148,11 @@ Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 - `SetDesign(taskID, design)`
 - `AppendDecision(taskID, Decision{summary, detail})`
 - `AddADR(taskID, ADR)`
+- `AddAppraisal(taskID, Appraisal)` — upsert a cached appraisal: an existing
+  appraisal with the same `kind`+`subject` is **replaced** (a recomputation,
+  with fresh `input_fingerprint`/`computed_at`, supersedes it), else appended.
+  `appraisals` is kept deterministically ordered on write (by `kind`, then
+  `subject`).
 - `Query(Query{text, task_ids?}) -> QueryResult{tasks[], decisions[], adrs[]}`
   — cross-board query → related tasks / prior decisions = project knowledge.
 

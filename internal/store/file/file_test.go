@@ -190,6 +190,53 @@ func TestRegistryRetireKeepsBoard(t *testing.T) {
 	}
 }
 
+func TestAddAppraisalUpsertOrderingAndPersist(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	mk := func(kind, subject, result, fp string) model.Appraisal {
+		return model.Appraisal{
+			Kind:             model.AppraisalKind(kind),
+			Subject:          model.RepRef(subject),
+			Result:           result,
+			Confidence:       0.8,
+			InputFingerprint: fp,
+			ComputedAt:       time.Now().UTC(),
+		}
+	}
+
+	// Append two distinct appraisals (inserted out of sort order).
+	if err := s.AddAppraisal("t", mk("relation", "branch:r/main", "depends", "fpA")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddAppraisal("t", mk("classification", "branch:r/feat", "feature", "fpB")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Upsert: same Kind+Subject as the first append → replace, not append.
+	if err := s.AddAppraisal("t", mk("relation", "branch:r/main", "blocks", "fpC")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back via Appraisals on a fresh Store (persistence across restarts).
+	s2 := New(root)
+	got, err := s2.Appraisals("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 appraisals (upsert replaced one), got %d: %+v", len(got), got)
+	}
+	// Deterministic order: Kind then Subject → classification before relation.
+	if got[0].Kind != model.AppraisalKind("classification") || got[1].Kind != model.AppraisalKind("relation") {
+		t.Fatalf("ordering = %+v", got)
+	}
+	// The relation appraisal carries the superseding result + fingerprint.
+	if got[1].Result != "blocks" || got[1].InputFingerprint != "fpC" {
+		t.Fatalf("upsert did not supersede: %+v", got[1])
+	}
+}
+
 func TestAppraisalsReadBack(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -150,6 +151,31 @@ func (s *Store) AppendDecision(taskID string, d model.Decision) error {
 func (s *Store) AddADR(taskID string, adr model.ADR) error {
 	return s.mutateBoard(taskID, func(b *model.Board) {
 		b.ADRs = append(b.ADRs, adr)
+	})
+}
+
+// AddAppraisal implements store.BoardStore: an existing appraisal with the same
+// Kind+Subject is replaced (a recomputation supersedes it), otherwise appended.
+// Appraisals are kept ordered by Kind then Subject on write.
+func (s *Store) AddAppraisal(taskID string, a model.Appraisal) error {
+	return s.mutateBoard(taskID, func(b *model.Board) {
+		replaced := false
+		for i := range b.Appraisals {
+			if b.Appraisals[i].Kind == a.Kind && b.Appraisals[i].Subject == a.Subject {
+				b.Appraisals[i] = a
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			b.Appraisals = append(b.Appraisals, a)
+		}
+		sort.Slice(b.Appraisals, func(i, j int) bool {
+			if b.Appraisals[i].Kind != b.Appraisals[j].Kind {
+				return b.Appraisals[i].Kind < b.Appraisals[j].Kind
+			}
+			return b.Appraisals[i].Subject < b.Appraisals[j].Subject
+		})
 	})
 }
 
