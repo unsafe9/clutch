@@ -107,6 +107,15 @@ rewritten rather than patched, and postmortems on failed or heavily-revised chan
 feed lessons back. A companion **quality manager** watches accumulated code rather
 than a single change and raises refactoring proposals as new tasks.
 
+Review the worker must answer is not only this internal gate. A worker carries a
+change all the way to integration, so review that originates *outside* the agent
+loop — human PR comments and decisions, external review tools — is the worker's
+responsibility too: the agent reads it and addresses it (revising, pushing fixes,
+re-requesting review), never deferring it back to a human. This is why the
+projection surfaces external-review state — a PR's review decision, requested
+changes, review threads — as first-class task data: so the worker can see it and
+close the loop on it exactly as it does an internal gate.
+
 ### Manager / executor
 
 The manager holds the roadmap and idea bank, deep-plans a suggestion into a formal
