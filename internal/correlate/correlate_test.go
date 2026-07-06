@@ -165,10 +165,11 @@ func TestFSEnrichesGitRepoNoNewTask(t *testing.T) {
 		Git: []model.GitObservation{
 			gitObs("acme/app", "/repos/app", model.Branch{Repo: "acme/app", Name: "main", Head: "aaa"}),
 		},
-		// Same path as the git repo: must enrich, not mint a new task.
+		// Same path as the git repo: must enrich, not mint a new task. The
+		// worktree is on the repo's main branch, so it routes to that branch-task.
 		FS: []model.FSObservation{
 			{Repo: model.RepoRef{Identity: "acme/app", Path: "/repos/app", Remote: "ssh://x"},
-				Worktrees: []model.Worktree{{Path: "/repos/app/wt", Branch: "feature/x", Repo: "acme/app"}}},
+				Worktrees: []model.Worktree{{Path: "/repos/app/wt", Branch: "main", Repo: "acme/app"}}},
 		},
 	}
 	res, err := Correlate(obs, ids, fakeAppraisals{})
@@ -342,6 +343,96 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 	}
 	if !foundUnres {
 		t.Fatalf("missing scan-wide unresolved-session flag: %+v", res.ScanWide)
+	}
+}
+
+// tasksByID indexes a projection by task id for per-task assertions.
+func tasksByID(tasks []model.Task) map[string]model.Task {
+	m := map[string]model.Task{}
+	for _, tk := range tasks {
+		m[tk.ID] = tk
+	}
+	return m
+}
+
+// A session records the branch it is on, so it must bind to the task owning that
+// branch at its cwd's repo — even when a DIFFERENT branch-task was indexed first
+// for that cwd (the old cwd-only, first-wins routing would have misbound it). A
+// session whose branch matches no branch-task falls back to cwd routing.
+func TestSessionBindsByBranch(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/x"}, "T-feat")
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "main"}, "T-main")
+	obs := model.Observations{
+		Git: []model.GitObservation{
+			{
+				Repo: model.RepoRef{Identity: "acme/app", Path: "/repos/app", Remote: "git@github.com:acme/app.git"},
+				// feature/x is enumerated first, so cwd-only routing would send the
+				// /repos/app session to T-feat.
+				Branches: []model.Branch{
+					{Repo: "acme/app", Name: "feature/x", Head: "f"},
+					{Repo: "acme/app", Name: "main", Head: "m"},
+				},
+			},
+		},
+		Sessions: []model.SessionObservation{
+			// branch main at the repo cwd -> must bind to the main task.
+			{Session: model.Session{Host: "claude-code", Cwd: "/repos/app", Branch: "main"}},
+			// branch not among the repo's branch-tasks -> fall back to cwd routing
+			// (first-wins T-feat).
+			{Session: model.Session{Host: "codex", Cwd: "/repos/app", Branch: "gone"}},
+		},
+	}
+	res, err := Correlate(obs, ids, fakeAppraisals{})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	byID := tasksByID(res.Tasks)
+	if got := len(byID["T-main"].Sessions); got != 1 {
+		t.Errorf("main task session count = %d, want 1 (the branch=main session)", got)
+	}
+	// T-feat gets exactly the fallback session (branch=gone), not the branch=main one.
+	if got := len(byID["T-feat"].Sessions); got != 1 {
+		t.Fatalf("feature/x task session count = %d, want 1 (the fallback session)", got)
+	}
+	if br := byID["T-feat"].Sessions[0].Branch; br != "gone" {
+		t.Errorf("feature/x task bound the wrong session (branch %q), want the branch=gone fallback", br)
+	}
+}
+
+// git worktree list reports every working tree, each on its own branch. A worktree
+// rep must attach only to the task of the branch checked out in it — not to every
+// branch-task of the repo.
+func TestWorktreeAttachesOnlyToItsBranchTask(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "main"}, "T-main")
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/x"}, "T-feat")
+	obs := model.Observations{
+		Git: []model.GitObservation{
+			{
+				Repo: model.RepoRef{Identity: "acme/app", Path: "/repos/app", Remote: "git@github.com:acme/app.git"},
+				Branches: []model.Branch{
+					{Repo: "acme/app", Name: "main", Head: "m"},
+					{Repo: "acme/app", Name: "feature/x", Head: "f"},
+				},
+				Worktrees: []model.Worktree{
+					{Path: "/repos/app", Branch: "main", Repo: "acme/app"},         // primary, on main
+					{Path: "/repos/app-wt", Branch: "feature/x", Repo: "acme/app"}, // linked, on feature/x
+				},
+			},
+		},
+	}
+	res, err := Correlate(obs, ids, fakeAppraisals{})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	byID := tasksByID(res.Tasks)
+	main, feat := byID["T-main"], byID["T-feat"]
+	if len(main.Worktrees) != 1 || main.Worktrees[0].Path != "/repos/app" {
+		t.Errorf("main task worktrees = %+v, want only /repos/app", main.Worktrees)
+	}
+	if len(feat.Worktrees) != 1 || feat.Worktrees[0].Path != "/repos/app-wt" {
+		t.Errorf("feature/x task worktrees = %+v, want only /repos/app-wt", feat.Worktrees)
 	}
 }
 

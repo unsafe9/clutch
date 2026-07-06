@@ -77,6 +77,12 @@ empty) and `mergeable` (`mergeable` / `conflicting` / `unknown` / empty), in
 addition to `state`, `draft`, and the `checks` rollup. PRs are observed across all
 states (open / merged / closed), not open-only, so the merged-PR signal is visible.
 
+A `worktrees` entry attaches only to the task whose branch is checked out in that
+worktree — not to every branch-task of the repo. A `sessions` entry binds to the
+task owning the session's recorded `branch` at its `cwd`'s repo; cwd-only routing
+(first match wins) is the fallback used only when the branch is absent or matches
+no branch-task there.
+
 > `Session` fields are **finalized** against the reverse-engineered CC/Codex
 > on-disk formats; see `docs/session-format.md` for the per-host field mapping,
 > cwd recovery, last-activity, and the deterministic `running` rule.

@@ -78,11 +78,22 @@ type builder struct {
 	byID  map[string]*model.Task
 	order []string // first-seen id order, before final ID sort
 
-	// pathToID maps a known repo/worktree path to the task id that owns it.
+	// pathToID maps a known repo/worktree path to the task id that owns it
+	// (first-wins), the cwd-only session-routing fallback.
 	pathToID map[string]string
+	// pathToRepo maps a known repo/worktree path to its durable repo identity
+	// (first-wins, so the git remote identity set first wins over the fs one),
+	// used to resolve a session cwd or fs worktree to the right branch-task.
+	pathToRepo map[string]string
 	// branchHead maps "repo-identity@head" to the task id whose branch has that
 	// head, used to resolve a child branch's Base to a parent task.
 	branchHead map[string]string
+	// branchNameToID maps "repo-identity@branch-name" to the branch-task id, so a
+	// session or worktree can bind to the task of the branch it is actually on.
+	branchNameToID map[string]string
+	// reposWithBranches records repo identities that anchored branch-tasks, so fs
+	// worktrees route by branch there and to the single repo-level task elsewhere.
+	reposWithBranches map[string]bool
 
 	// unmatchedSessions are scan-wide session flags whose cwd matched no known
 	// path; they have no owning task (TaskID stays empty).
@@ -91,9 +102,12 @@ type builder struct {
 
 func newBuilder() *builder {
 	return &builder{
-		byID:       map[string]*model.Task{},
-		pathToID:   map[string]string{},
-		branchHead: map[string]string{},
+		byID:              map[string]*model.Task{},
+		pathToID:          map[string]string{},
+		pathToRepo:        map[string]string{},
+		branchHead:        map[string]string{},
+		branchNameToID:    map[string]string{},
+		reposWithBranches: map[string]bool{},
 	}
 }
 
@@ -114,7 +128,8 @@ func (b *builder) ingestGit(gobs []model.GitObservation, ids IDResolver) error {
 		identity := g.Repo.Identity
 
 		if len(g.Branches) == 0 {
-			// A repo with no branch context anchors a repo-level task.
+			// A repo with no branch context anchors a repo-level task; with no
+			// branch-tasks to route by, every worktree attaches to it.
 			id, err := resolveOrMint(ids, model.Signature{Repo: identity})
 			if err != nil {
 				return err
@@ -122,7 +137,8 @@ func (b *builder) ingestGit(gobs []model.GitObservation, ids IDResolver) error {
 			t := b.task(id)
 			b.addRepo(t, g.Repo)
 			b.indexPath(g.Repo.Path, id)
-			b.attachWorktrees(t, g.Worktrees, id)
+			b.setPathRepo(g.Repo.Path, identity)
+			b.attachWorktreesTo(t, g.Worktrees, id)
 			b.mergeCommits(t, g.Commits)
 			b.attachPRs(t, g.PRs)
 			b.attachIssues(t, g.Issues)
@@ -140,13 +156,17 @@ func (b *builder) ingestGit(gobs []model.GitObservation, ids IDResolver) error {
 			t := b.task(id)
 			b.addRepo(t, g.Repo)
 			b.indexPath(g.Repo.Path, id)
+			b.setPathRepo(g.Repo.Path, identity)
 			b.addBranch(t, br)
 			b.indexBranchHead(identity, br.Head, id)
+			b.indexBranchName(identity, br.Name, id)
 			b.mergeCommits(t, g.Commits)
 			b.attachPRs(t, g.PRs)
 			b.attachIssues(t, g.Issues)
-			b.attachWorktrees(t, g.Worktrees, id)
 		}
+		// Attach each worktree to the task of the branch checked out in it —
+		// after all branch-tasks exist — rather than to every branch-task.
+		b.attachWorktreesByBranch(identity, g.Worktrees)
 	}
 	return nil
 }
@@ -168,7 +188,21 @@ func (b *builder) ingestFS(fobs []model.FSObservation, ids IDResolver) error {
 		t := b.task(id)
 		b.addRepo(t, f.Repo)
 		b.indexPath(f.Repo.Path, id)
-		b.attachWorktrees(t, f.Worktrees, id)
+		b.setPathRepo(f.Repo.Path, identity)
+
+		// The fs identity (local/<base>) diverges from the git remote identity for
+		// the same checkout; branch-tasks were keyed by the git identity, so route
+		// by the identity established for this path. A git-discovered repo routes
+		// its fs worktrees by branch; a purely fs-only repo has one repo-level task.
+		routeIdentity := identity
+		if gitID, ok := b.pathToRepo[f.Repo.Path]; ok {
+			routeIdentity = gitID
+		}
+		if b.reposWithBranches[routeIdentity] {
+			b.attachWorktreesByBranch(routeIdentity, f.Worktrees)
+		} else {
+			b.attachWorktreesTo(t, f.Worktrees, id)
+		}
 	}
 	return nil
 }
@@ -176,7 +210,7 @@ func (b *builder) ingestFS(fobs []model.FSObservation, ids IDResolver) error {
 func (b *builder) ingestSessions(sobs []model.SessionObservation) {
 	for _, s := range sobs {
 		sess := s.Session
-		if id, ok := b.pathToID[sess.Cwd]; ok {
+		if id, ok := b.sessionTaskID(sess); ok {
 			b.addSession(b.task(id), sess)
 			continue
 		}
@@ -188,6 +222,22 @@ func (b *builder) ingestSessions(sobs []model.SessionObservation) {
 			Refs:   []model.RepRef{sessionRef(sess)},
 		})
 	}
+}
+
+// sessionTaskID routes a session to its task. When the session records a branch,
+// it binds to the task owning that branch at the cwd's repo; cwd-only routing
+// (first-wins) is the fallback when the branch is absent or matches no branch-task
+// at that repo.
+func (b *builder) sessionTaskID(sess model.Session) (string, bool) {
+	if sess.Branch != "" {
+		if identity, ok := b.pathToRepo[sess.Cwd]; ok {
+			if id, ok := b.branchNameToID[identity+"@"+sess.Branch]; ok {
+				return id, true
+			}
+		}
+	}
+	id, ok := b.pathToID[sess.Cwd]
+	return id, ok
 }
 
 // ── representation helpers (pure projection) ──────────────────────────────────
@@ -255,29 +305,48 @@ func (b *builder) addBranch(t *model.Task, br model.Branch) {
 	b.addLink(t, br.Ref)
 }
 
-func (b *builder) attachWorktrees(t *model.Task, wts []model.Worktree, id string) {
+// attachWorktreesByBranch attaches each worktree to the task that owns the branch
+// checked out in it, so a worktree rep lands only on that branch's task instead of
+// on every branch-task of the repo. A worktree whose branch matches no branch-task
+// (detached HEAD, or a branch not enumerated) is left unattached.
+func (b *builder) attachWorktreesByBranch(identity string, wts []model.Worktree) {
 	for _, w := range wts {
-		w.Ref = worktreeRef(w.Path)
-		b.indexPath(w.Path, id)
-		exists := false
-		for i := range t.Worktrees {
-			if t.Worktrees[i].Ref == w.Ref {
-				// FS enriches/confirms an already-discovered worktree.
-				if w.Branch != "" {
-					t.Worktrees[i].Branch = w.Branch
-				}
-				if w.Repo != "" {
-					t.Worktrees[i].Repo = w.Repo
-				}
-				exists = true
-				break
-			}
+		id, ok := b.branchNameToID[identity+"@"+w.Branch]
+		if !ok {
+			continue
 		}
-		if !exists {
-			t.Worktrees = append(t.Worktrees, w)
-			b.addLink(t, w.Ref)
+		b.attachWorktree(b.task(id), w, id)
+	}
+}
+
+// attachWorktreesTo attaches every worktree to one task, used for a repo-level
+// task that has no branch-tasks to route by.
+func (b *builder) attachWorktreesTo(t *model.Task, wts []model.Worktree, id string) {
+	for _, w := range wts {
+		b.attachWorktree(t, w, id)
+	}
+}
+
+// attachWorktree records one worktree rep on a task (deduping by ref, enriching an
+// already-seen one) and indexes its path so a session in that worktree can route.
+func (b *builder) attachWorktree(t *model.Task, w model.Worktree, id string) {
+	w.Ref = worktreeRef(w.Path)
+	b.indexPath(w.Path, id)
+	b.setPathRepo(w.Path, w.Repo)
+	for i := range t.Worktrees {
+		if t.Worktrees[i].Ref == w.Ref {
+			// FS enriches/confirms an already-discovered worktree.
+			if w.Branch != "" {
+				t.Worktrees[i].Branch = w.Branch
+			}
+			if w.Repo != "" {
+				t.Worktrees[i].Repo = w.Repo
+			}
+			return
 		}
 	}
+	t.Worktrees = append(t.Worktrees, w)
+	b.addLink(t, w.Ref)
 }
 
 func (b *builder) mergeCommits(t *model.Task, c model.CommitSummary) {
@@ -366,6 +435,28 @@ func (b *builder) indexBranchHead(repoIdentity, head, id string) {
 		return
 	}
 	b.branchHead[repoIdentity+"@"+head] = id
+}
+
+// setPathRepo records the durable repo identity for a path (first-wins, so the
+// git remote identity set during ingestGit is not overwritten by the fs one).
+func (b *builder) setPathRepo(path, identity string) {
+	if path == "" || identity == "" {
+		return
+	}
+	if _, ok := b.pathToRepo[path]; !ok {
+		b.pathToRepo[path] = identity
+	}
+}
+
+// indexBranchName maps a repo's branch name to its branch-task id (first-wins) and
+// marks the repo as having branch-tasks, so sessions and fs worktrees can route by
+// branch.
+func (b *builder) indexBranchName(repoIdentity, name, id string) {
+	b.reposWithBranches[repoIdentity] = true
+	key := repoIdentity + "@" + name
+	if _, ok := b.branchNameToID[key]; !ok {
+		b.branchNameToID[key] = id
+	}
 }
 
 // ── finalize: lineage, appraisal fold, deterministic ordering ─────────────────
