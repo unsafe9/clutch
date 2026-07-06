@@ -510,8 +510,30 @@ func (b *builder) finalize(appraisals AppraisalReader, designs DesignReader, ini
 		t.Lifecycle = deriveLifecycle(t)
 		t.Title = deriveTitle(t)
 
-		if err := foldAppraisals(t, appraisals); err != nil {
+		// An undiverged branch (tip == its merge-base with base) reads as `merged`
+		// deterministically, but git cannot tell a freshly-branched task from a
+		// fully-merged one. The board resolves the ambiguity: a non-empty design
+		// means the task was planned, not merged. A merged PR or a cached
+		// classification appraisal is a definitive signal that pre-empts the
+		// heuristic.
+		ambiguous := t.Lifecycle == model.LifecycleMerged &&
+			len(undivergedBranches(t)) > 0 && !anyMergedPR(t)
+		hasDesign := false
+		if ambiguous && designs != nil {
+			has, err := designs.HasDesign(t.ID)
+			if err != nil {
+				return nil, err
+			}
+			hasDesign = has
+		}
+
+		classified, err := foldAppraisals(t, appraisals)
+		if err != nil {
 			return nil, err
+		}
+
+		if ambiguous && !classified && hasDesign {
+			t.Lifecycle = model.LifecyclePlanned
 		}
 
 		sortReps(t)
@@ -521,7 +543,8 @@ func (b *builder) finalize(appraisals AppraisalReader, designs DesignReader, ini
 	// Materialize clutch-initiated tasks that no observation produced, so a
 	// freshly-created `clutch task new` task still projects. Such a task is
 	// registry-only: its Class ② representations stay empty until a branch is
-	// later linked to the id, and it starts at the idea lifecycle.
+	// later linked to the id. It starts at the idea lifecycle, or planned once its
+	// board carries a design (the task has been planned, not merely conceived).
 	if initiated != nil {
 		its, err := initiated.InitiatedTasks()
 		if err != nil {
@@ -531,10 +554,20 @@ func (b *builder) finalize(appraisals AppraisalReader, designs DesignReader, ini
 			if _, built := b.byID[it.ID]; built {
 				continue // an observation already produced a task for this id
 			}
+			lifecycle := model.LifecycleIdea
+			if designs != nil {
+				hasDesign, err := designs.HasDesign(it.ID)
+				if err != nil {
+					return nil, err
+				}
+				if hasDesign {
+					lifecycle = model.LifecyclePlanned
+				}
+			}
 			out = append(out, model.Task{
 				ID:         it.ID,
 				Title:      it.Title,
-				Lifecycle:  model.LifecycleIdea,
+				Lifecycle:  lifecycle,
 				Mode:       it.Mode,
 				Provenance: model.ProvenanceClutchInitiated,
 				Created:    it.Created,
@@ -549,14 +582,16 @@ func (b *builder) finalize(appraisals AppraisalReader, designs DesignReader, ini
 }
 
 // foldAppraisals applies cached classify/relation/link appraisals — the only
-// sub-1.0-confidence inputs — onto the task.
-func foldAppraisals(t *model.Task, appraisals AppraisalReader) error {
+// sub-1.0-confidence inputs — onto the task. It reports whether a classification
+// appraisal was folded, so the board-driven derivation can defer to classify's
+// explicit verdict (see finalize).
+func foldAppraisals(t *model.Task, appraisals AppraisalReader) (classified bool, err error) {
 	if appraisals == nil {
-		return nil
+		return false, nil
 	}
 	apps, err := appraisals.Appraisals(t.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	sort.SliceStable(apps, func(i, j int) bool {
 		if apps[i].Kind != apps[j].Kind {
@@ -573,6 +608,7 @@ func foldAppraisals(t *model.Task, appraisals AppraisalReader) error {
 			// deterministic default lifecycle.
 			if a.Subject == taskRef(t.ID) && a.Result != "" {
 				t.Lifecycle = model.Lifecycle(a.Result)
+				classified = true
 			}
 		case model.AppraisalRelation:
 			applyRelationAppraisal(t, a)
@@ -586,7 +622,7 @@ func foldAppraisals(t *model.Task, appraisals AppraisalReader) error {
 			// Extensible kind we do not recognize: tolerate by ignoring.
 		}
 	}
-	return nil
+	return classified, nil
 }
 
 // applyRelationAppraisal decodes a relation appraisal Result of the form
@@ -664,6 +700,31 @@ func deriveLifecycle(t *model.Task) model.Lifecycle {
 		return model.LifecycleActive
 	}
 	return model.LifecycleIdea
+}
+
+// undivergedBranches returns the refs of the task's branches whose tip equals
+// their merge-base with base — the deterministic layer records this as
+// IntegrationMerged, but it cannot tell a new branch sitting at the base tip from
+// one that was genuinely merged. Empty when the task has no such branch.
+func undivergedBranches(t *model.Task) []model.RepRef {
+	var refs []model.RepRef
+	for _, br := range t.Branches {
+		if br.Integration == model.IntegrationMerged {
+			refs = append(refs, br.Ref)
+		}
+	}
+	return refs
+}
+
+// anyMergedPR reports whether the task has a merged pull request — a definitive
+// merged signal, unlike the ambiguous branch-integration case.
+func anyMergedPR(t *model.Task) bool {
+	for _, pr := range t.PRs {
+		if strings.ToLower(pr.State) == "merged" {
+			return true
+		}
+	}
+	return false
 }
 
 // deriveTitle picks a human label from the available representations, preferring

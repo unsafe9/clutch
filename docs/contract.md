@@ -168,12 +168,12 @@ Convention/declared imply confidence 1.0; appraisal < 1.0.
   subsequent `scan` / `tasks` projection as a **registry-only** task (empty
   Class ②). Each invocation mints a distinct id; the title is a label, not a key.
 
-  A clutch-initiated task **starts at the `idea` lifecycle**. (Board-driven
-  derivation to `planned` is added in a later phase.) When a later scan discovers
-  a branch that correlates to the task, that branch's signature is meant to
-  attach to the same id so the representations join it — this attach-by-convention
-  linkage is **not yet implemented**, so until then a clutch-initiated task and a
-  later-created branch project as separate ids.
+  A clutch-initiated task **starts at the `idea` lifecycle**, advancing to
+  `planned` once its board carries a non-empty design (see *Lifecycle
+  derivation*). When a later scan discovers a branch that correlates to the task,
+  that branch's signature is meant to attach to the same id so the representations
+  join it — this attach-by-convention linkage is **not yet implemented**, so until
+  then a clutch-initiated task and a later-created branch project as separate ids.
 
 ---
 
@@ -198,7 +198,32 @@ tolerate kinds they do not recognize.
 
 ---
 
-## Board (state behind the BoardStore port)
+## Lifecycle derivation
+
+The `lifecycle` field (Class ①) is derived, not stored, by the deterministic
+core each scan, then optionally overridden by a cached classify verdict. (Go:
+`internal/correlate` `deriveLifecycle` + `finalize`.)
+
+**Deterministic default.** In precedence order: a merged PR → `merged`; else a PR
+under review (open & non-draft, or `review_decision` of
+`changes_requested`/`review_required`) → `review`; else an open draft PR →
+`planned`; else a branch integrated into base → `merged`; else a branch with a
+head, or any commits → `active`; else `idea`.
+
+**Undiverged-branch ambiguity.** A branch whose tip equals its merge-base with
+base (`integration = merged`) reads as `merged` above, but git alone **cannot
+tell a branch freshly cut at the base tip from one genuinely merged** — both look
+identical. Such a task has **no git activity of its own**. The board resolves it:
+
+- **`planned` trigger.** A task with no git activity of its own — a registry-only
+  clutch-initiated task, **or** an undiverged branch (no merged PR) — whose board
+  carries a **non-empty design** derives `planned`: it has been planned, not
+  merged. A registry-only task **without** a design stays `idea`.
+
+**Appraisal override.** A folded classification appraisal is classify's explicit
+verdict and **wins over both** the deterministic default and the `planned`
+heuristic (it sets `lifecycle` directly). A merged PR is likewise definitive and
+is never treated as the ambiguous case.
 
 Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 `internal/model/board.go`.)

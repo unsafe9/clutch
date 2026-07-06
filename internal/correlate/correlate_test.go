@@ -659,6 +659,143 @@ func TestLifecycleFromPRDetailedStatus(t *testing.T) {
 	}
 }
 
+// undivergedBranchObs builds a git observation for a single branch whose tip
+// equals its merge-base with base — the deterministic layer marks this
+// IntegrationMerged (the ambiguous new-vs-merged case).
+func undivergedBranchObs(identity, path, branch string) model.GitObservation {
+	return model.GitObservation{
+		Repo: model.RepoRef{Identity: identity, Path: path},
+		Branches: []model.Branch{{
+			Repo: identity, Name: branch, Head: "tip", Base: "tip",
+			Integration: model.IntegrationMerged,
+		}},
+	}
+}
+
+func TestPlannedFromBoardDesignOnUndivergedBranch(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/plan"}, "T-plan")
+	obs := model.Observations{Git: []model.GitObservation{
+		undivergedBranchObs("acme/app", "/repos/app", "feature/plan"),
+	}}
+	designs := fakeDesigns{withDesign: map[string]bool{"T-plan": true}}
+	res, err := Correlate(obs, ids, fakeAppraisals{}, designs, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	tk := res.Tasks[0]
+	if tk.Lifecycle != model.LifecyclePlanned {
+		t.Fatalf("lifecycle = %q, want planned (board design resolves the undiverged branch)", tk.Lifecycle)
+	}
+	if len(tk.Unresolved) != 0 {
+		t.Fatalf("board design should leave no unresolved flag, got %+v", tk.Unresolved)
+	}
+}
+
+func TestUndivergedBranchWithoutDesignStaysMerged(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/plan"}, "T-plan")
+	obs := model.Observations{Git: []model.GitObservation{
+		undivergedBranchObs("acme/app", "/repos/app", "feature/plan"),
+	}}
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	// With no board design the deterministic default is kept.
+	if got := res.Tasks[0].Lifecycle; got != model.LifecycleMerged {
+		t.Fatalf("lifecycle = %q, want merged (deterministic default kept)", got)
+	}
+}
+
+func TestUndivergedBranchClassificationAppraisalBeatsDesign(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/plan"}, "T-plan")
+	obs := model.Observations{Git: []model.GitObservation{
+		undivergedBranchObs("acme/app", "/repos/app", "feature/plan"),
+	}}
+	designs := fakeDesigns{withDesign: map[string]bool{"T-plan": true}}
+	appr := fakeAppraisals{byID: map[string][]model.Appraisal{
+		"T-plan": {{Kind: model.AppraisalClassification, Subject: "task:T-plan", Result: "active", Confidence: 0.8}},
+	}}
+	res, err := Correlate(obs, ids, appr, designs, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	// classify's explicit verdict wins over the board-design planned heuristic.
+	if got := res.Tasks[0].Lifecycle; got != model.LifecycleActive {
+		t.Fatalf("lifecycle = %q, want active (classification appraisal wins over design-planned)", got)
+	}
+}
+
+func TestDivergedBranchWithDesignNotPlanned(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/x"}, "T-x")
+	obs := model.Observations{Git: []model.GitObservation{
+		{
+			Repo: model.RepoRef{Identity: "acme/app", Path: "/repos/app"},
+			// Diverged: own commits beyond base → unmerged, real git activity.
+			Branches: []model.Branch{{
+				Repo: "acme/app", Name: "feature/x", Head: "bbb", Base: "aaa",
+				Integration: model.IntegrationUnmerged,
+			}},
+		},
+	}}
+	designs := fakeDesigns{withDesign: map[string]bool{"T-x": true}}
+	res, err := Correlate(obs, ids, fakeAppraisals{}, designs, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	// A diverged branch has git activity; the board design does not override its
+	// active derivation.
+	if got := res.Tasks[0].Lifecycle; got != model.LifecycleActive {
+		t.Fatalf("lifecycle = %q, want active (diverged branch is not the planned case)", got)
+	}
+}
+
+func TestUndivergedBranchWithMergedPRStaysMerged(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/plan"}, "T-plan")
+	obs := model.Observations{Git: []model.GitObservation{
+		{
+			Repo: model.RepoRef{Identity: "acme/app", Path: "/repos/app"},
+			Branches: []model.Branch{{
+				Repo: "acme/app", Name: "feature/plan", Head: "tip", Base: "tip",
+				Integration: model.IntegrationMerged,
+			}},
+			PRs: []model.PullRequest{{Host: "github", Number: 9, State: "merged"}},
+		},
+	}}
+	// A merged PR is a definitive merged signal, so even with a board design the
+	// task is not the ambiguous case and stays merged.
+	designs := fakeDesigns{withDesign: map[string]bool{"T-plan": true}}
+	res, err := Correlate(obs, ids, fakeAppraisals{}, designs, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if got := res.Tasks[0].Lifecycle; got != model.LifecycleMerged {
+		t.Fatalf("lifecycle = %q, want merged (merged PR is definitive)", got)
+	}
+}
+
+func TestInitiatedTaskPlannedFromDesign(t *testing.T) {
+	initiated := fakeInitiated{tasks: []model.InitiatedTask{
+		{ID: "INIT-D", Title: "designed spike", Mode: model.ModeSteer},
+	}}
+	designs := fakeDesigns{withDesign: map[string]bool{"INIT-D": true}}
+	res, err := Correlate(model.Observations{}, newFakeIDs(), fakeAppraisals{}, designs, initiated)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(res.Tasks) != 1 {
+		t.Fatalf("want 1 task, got %d", len(res.Tasks))
+	}
+	// A registry-only initiated task with a board design is planned, not idea.
+	if got := res.Tasks[0].Lifecycle; got != model.LifecyclePlanned {
+		t.Fatalf("initiated lifecycle = %q, want planned (board design present)", got)
+	}
+}
+
 func TestDeterministicOrderingAcrossRuns(t *testing.T) {
 	build := func() Result {
 		ids := newFakeIDs()
