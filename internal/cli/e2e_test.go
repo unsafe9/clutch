@@ -62,6 +62,13 @@ func TestGoldenE2E(t *testing.T) {
 		if err != nil {
 			t.Fatalf("correlate.Correlate: %v", err)
 		}
+		// Stamp Class-① identity metadata (created/updated/mode) from the store,
+		// exactly as project() does. Across the two renders these come from the
+		// SAME persisted registry (first render mints+stamps, second reuses), so
+		// they stay byte-identical without freezing the store clock.
+		if err := fillIdentity(res.Tasks, backend); err != nil {
+			t.Fatalf("fillIdentity: %v", err)
+		}
 		// GeneratedAt and scan duration are the only non-deterministic envelope
 		// inputs (a wall clock); freeze both so the two renders stay
 		// byte-identical, mirroring how project() reads the clock in one place.
@@ -151,6 +158,16 @@ func TestGoldenE2E(t *testing.T) {
 		}
 		if tk.Lifecycle != model.LifecycleActive {
 			t.Errorf("task %s lifecycle = %q, want active", tk.ID, tk.Lifecycle)
+		}
+		// Identity metadata: created/updated are stamped from the store (a
+		// freshly-minted task has created == updated, both non-zero), and the
+		// effective mode defaults to the human-in-the-loop "steer" since no
+		// policy mode is stored.
+		if tk.Created.IsZero() || !tk.Created.Equal(tk.Updated) {
+			t.Errorf("task %s created/updated = %v/%v, want equal non-zero", tk.ID, tk.Created, tk.Updated)
+		}
+		if tk.Mode != model.ModeSteer {
+			t.Errorf("task %s mode = %q, want steer", tk.ID, tk.Mode)
 		}
 		if len(tk.Branches) != 1 {
 			t.Errorf("task %s has %d branches, want 1", tk.ID, len(tk.Branches))

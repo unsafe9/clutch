@@ -271,6 +271,52 @@ func TestAppraisalsReadBack(t *testing.T) {
 	}
 }
 
+func TestIdentityStamp(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return clock }
+
+	id, _ := s.Mint(model.Signature{Repo: "r", Branch: "main"})
+
+	// First sight: created and updated both stamped to now; mode empty (no
+	// explicit policy write).
+	c1, u1, m1, err := s.Identity(id, "fpA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c1.Equal(clock) || !u1.Equal(clock) {
+		t.Fatalf("first stamp created/updated = %v/%v, want %v", c1, u1, clock)
+	}
+	if m1 != "" {
+		t.Fatalf("mode = %q, want empty", m1)
+	}
+
+	// Same fingerprint at a later clock: updated does NOT advance, created stable.
+	clock = clock.Add(time.Hour)
+	c2, u2, _, _ := s.Identity(id, "fpA")
+	if !c2.Equal(c1) || !u2.Equal(u1) {
+		t.Fatalf("stable-fingerprint stamp drifted: created=%v updated=%v", c2, u2)
+	}
+
+	// Changed fingerprint: updated advances to now, created stays.
+	c3, u3, _, _ := s.Identity(id, "fpB")
+	if !c3.Equal(c1) {
+		t.Fatalf("created changed on fingerprint change: %v", c3)
+	}
+	if !u3.Equal(clock) {
+		t.Fatalf("updated = %v, want advanced to %v", u3, clock)
+	}
+
+	// Persistence: a fresh Store reuses the stamped timestamps for an unchanged
+	// fingerprint.
+	s2 := New(root)
+	c4, u4, _, _ := s2.Identity(id, "fpB")
+	if !c4.Equal(c1) || !u4.Equal(u3) {
+		t.Fatalf("identity not persisted: created=%v updated=%v", c4, u4)
+	}
+}
+
 func TestTaskIDTraversalRejected(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)

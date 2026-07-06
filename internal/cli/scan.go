@@ -59,8 +59,11 @@ func project() (model.ProjectionEnvelope, error) {
 	if err != nil {
 		return model.ProjectionEnvelope{}, err
 	}
-	generatedAt := time.Now()
 	tasks := res.Tasks
+	if err := fillIdentity(tasks, backend); err != nil {
+		return model.ProjectionEnvelope{}, err
+	}
+	generatedAt := time.Now()
 	// The contract's machine shape renders empty collections as [], never null.
 	if tasks == nil {
 		tasks = []model.Task{}

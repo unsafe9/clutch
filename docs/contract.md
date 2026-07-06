@@ -35,11 +35,29 @@ Lives in the store / id-registry. Set by clutch and the planner/agent layer.
 | `id`         | string        | clutch-assigned identity, independent of any representation, stable |
 | `title`      | string        | label (from branch/PR/issue or planner)                  |
 | `lifecycle`  | Lifecycle     | enum (see below)                                          |
-| `mode`       | Mode          | enum; project default → task override                    |
+| `mode`       | Mode          | enum; **effective** value — the projection defaults an unset stored mode to `steer` (see below) |
 | `provenance` | Provenance    | enum: clutch-initiated / git-detected                    |
 | `board`      | *BoardRef     | pointer/locator to this task's board backend             |
-| `created`    | RFC3339 time  | when the identity was minted                             |
-| `updated`    | RFC3339 time  | when persisted identity/policy last changed              |
+| `created`    | RFC3339 time  | when the identity was first minted/seen; set once, then stable |
+| `updated`    | RFC3339 time  | when the task's observed state last changed (see below)  |
+
+**`created` / `updated` derivation.** Both are persisted in the id-registry
+(never recomputed from scratch) and filled into the projection each scan.
+`created` is stamped once, the first time the id is minted/seen. `updated`
+advances only when a scan observes the task's derived state change: the registry
+records a **fingerprint** — a digest of the task's Class-② representations and
+Class-③ relations — at each update, and a scan whose fingerprint differs from the
+stored one advances `updated` and re-records the fingerprint. A freshly-minted
+task has `created == updated`. Timestamp determinism does not depend on the wall
+clock across scans: unchanged state re-emits the persisted values verbatim.
+
+**`mode` — stored vs. effective.** The **stored** mode is Class-① policy in the
+id-registry, written only by an explicit policy action (no setter command exists
+yet, so it is currently always unset). The projection emits an **effective**
+mode: the stored mode when set, else the default `steer` — the safe
+human-in-the-loop default. The broader mode-default policy (project-level default
+vs. per-task, and the conflict rule when both are set) stays **open** (README:
+*Mode default granularity*).
 
 ### Class ② Representations — DERIVED, recomputed each scan, NEVER persisted
 
@@ -198,6 +216,11 @@ signature yields the same id across scans. Lives beside the board store. (Go:
   the surviving id.
 - `Retire(id) -> err` — task gone; the id is **NOT deleted** (board knowledge
   persists), only marked retired.
+
+Besides the signature→id anchoring, the registry persists per-id **identity
+metadata** — `created` / `updated` timestamps, the `updated` fingerprint, and the
+stored `mode` — read back each scan to fill the projection's Class-① fields (see
+*Class ① → created/updated derivation* and *mode — stored vs. effective*).
 
 **Vanished-representation behavior:** when a previously-anchored signature stops
 appearing in scans, the id is **retained** (board history is the knowledge

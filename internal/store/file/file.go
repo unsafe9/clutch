@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/unsafe9/clutch/internal/model"
 	"github.com/unsafe9/clutch/internal/store"
@@ -30,6 +31,9 @@ import (
 type Store struct {
 	// Root is the out-of-repo directory holding boards and the id registry.
 	Root string
+	// now supplies the wall clock for identity timestamps; overridable in tests
+	// to keep timestamp behavior deterministic.
+	now func() time.Time
 
 	mu       sync.Mutex
 	registry registry
@@ -43,10 +47,18 @@ type registry struct {
 	Ids map[string]*idMeta `json:"ids"`
 }
 
-// idMeta is per-id registry metadata.
+// idMeta is per-id registry metadata. Created/Updated are the durable identity
+// timestamps surfaced in the projection; Fingerprint is the digest of the task's
+// representations recorded at the last Updated, so a later scan can tell whether
+// the observed state changed. Mode is the stored policy mode, set only by an
+// explicit policy write (none exists yet), NOT the effective projection default.
 type idMeta struct {
-	Retired    bool   `json:"retired"`
-	MergedInto string `json:"merged_into,omitempty"`
+	Retired     bool       `json:"retired"`
+	MergedInto  string     `json:"merged_into,omitempty"`
+	Created     time.Time  `json:"created"`
+	Updated     time.Time  `json:"updated"`
+	Fingerprint string     `json:"fingerprint,omitempty"`
+	Mode        model.Mode `json:"mode,omitempty"`
 }
 
 // Compile-time proof that *Store implements both ports.
@@ -58,7 +70,7 @@ var (
 // New returns a file-backed store rooted at root, ensuring root and its boards
 // directory exist and loading (or lazily creating) the id-registry index.
 func New(root string) *Store {
-	s := &Store{Root: root}
+	s := &Store{Root: root, now: time.Now}
 	_ = os.MkdirAll(s.boardsDir(), 0o755)
 	s.registry = s.loadRegistry()
 	return s
@@ -347,6 +359,38 @@ func (s *Store) Retire(id string) error {
 	}
 	s.registry.Ids[id].Retired = true
 	return s.persistRegistry()
+}
+
+// Identity records and returns the durable identity metadata for id given the
+// task's current representation fingerprint. created is set once, when the id is
+// first seen; updated advances to now() whenever fingerprint differs from the
+// value recorded at the last update (i.e. the task's observed state changed
+// between scans); mode is the stored policy mode, empty until an explicit policy
+// write records one. Any change is persisted before returning.
+func (s *Store) Identity(id, fingerprint string) (created, updated time.Time, mode model.Mode, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.registry.Ids[id]
+	if !ok {
+		m = &idMeta{}
+		s.registry.Ids[id] = m
+	}
+	changed := false
+	switch {
+	case m.Created.IsZero():
+		now := s.now().UTC()
+		m.Created, m.Updated, m.Fingerprint = now, now, fingerprint
+		changed = true
+	case m.Fingerprint != fingerprint:
+		m.Updated, m.Fingerprint = s.now().UTC(), fingerprint
+		changed = true
+	}
+	if changed {
+		if err := s.persistRegistry(); err != nil {
+			return time.Time{}, time.Time{}, "", err
+		}
+	}
+	return m.Created, m.Updated, m.Mode, nil
 }
 
 // Appraisals implements correlate.AppraisalReader: the cached board.Appraisals
