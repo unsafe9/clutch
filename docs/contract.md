@@ -221,6 +221,18 @@ it. (Go: `internal/model/projection.go`.)
 
 `schema_version` follows the policy below.
 
+`scan_stats` summarizes the run: `repos_scanned` and `worktrees` are distinct
+paths across the git and fs producers (deduped by path, since the two assign a
+repo divergent identities that only its path unifies); `sessions` counts only the
+sessions **within a configured search root** (out-of-scope sessions are neither
+read nor counted); `tasks_projected` is the projected task count; `duration_ms`
+is the wall-clock scan time.
+
+A `session`-kind `unresolved` flag is emitted only for an **in-scope** session
+whose `cwd` matched no discovered repo/worktree; sessions whose `cwd` lies outside
+every search root are dropped, never flagged — they are permanent noise the
+classify layer cannot act on.
+
 ---
 
 ## Schema versioning policy

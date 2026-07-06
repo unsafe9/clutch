@@ -27,8 +27,11 @@ const (
 	hostCodex      = "codex"
 )
 
-// Observe discovers active/recent CC and Codex sessions in the real user home.
-func Observe() ([]model.SessionObservation, error) {
+// Observe discovers active/recent CC and Codex sessions in the real user home,
+// restricted to sessions whose cwd lies within one of the configured search
+// roots. Out-of-scope sessions are neither read (where cheaply determinable) nor
+// returned, so global sessions unrelated to the scanned roots never surface.
+func Observe(roots []string) ([]model.SessionObservation, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -36,32 +39,102 @@ func Observe() ([]model.SessionObservation, error) {
 	ccProjects := filepath.Join(home, ".claude", "projects")
 	codexSessions := filepath.Join(home, ".codex", "sessions")
 	codexArchived := filepath.Join(home, ".codex", "archived_sessions")
-	return observe(ccProjects, codexSessions, codexArchived, time.Now())
+	return observe(ccProjects, codexSessions, codexArchived, roots, time.Now())
 }
 
 // observe is the testable core: it reads sessions from explicit base directories
 // rather than the real home, so tests can drive it with fixtures in t.TempDir().
 // Missing directories yield no observations and no error; malformed or partial
-// files are skipped.
-func observe(ccProjectsDir, codexSessionsDir, codexArchivedDir string, now time.Time) ([]model.SessionObservation, error) {
+// files are skipped. Only sessions whose cwd is within one of roots are returned.
+func observe(ccProjectsDir, codexSessionsDir, codexArchivedDir string, roots []string, now time.Time) ([]model.SessionObservation, error) {
+	scope := newRootScope(roots)
 	var out []model.SessionObservation
 
-	for _, p := range globIgnoreMissing(filepath.Join(ccProjectsDir, "*", "*.jsonl")) {
-		if s, ok := parseClaudeCode(p, now); ok {
-			out = append(out, model.SessionObservation{Session: s})
+	// CC: the sanitized bucket name is a cheap out-of-scope pre-filter — a whole
+	// bucket whose name cannot map to any search root is skipped without opening
+	// a single transcript. Survivors are settled by the definitive cwd check.
+	for _, bucket := range globIgnoreMissing(filepath.Join(ccProjectsDir, "*")) {
+		if !scope.bucketMaybeInScope(filepath.Base(bucket)) {
+			continue
+		}
+		for _, p := range globIgnoreMissing(filepath.Join(bucket, "*.jsonl")) {
+			if s, ok := parseClaudeCode(p, now); ok && scope.contains(s.Cwd) {
+				out = append(out, model.SessionObservation{Session: s})
+			}
 		}
 	}
 	for _, p := range globIgnoreMissing(filepath.Join(codexSessionsDir, "*", "*", "*", "rollout-*.jsonl")) {
-		if s, ok := parseCodex(p, now, false); ok {
+		if s, ok := parseCodex(p, now, false, scope); ok {
 			out = append(out, model.SessionObservation{Session: s})
 		}
 	}
 	for _, p := range globIgnoreMissing(filepath.Join(codexArchivedDir, "rollout-*.jsonl")) {
-		if s, ok := parseCodex(p, now, true); ok {
+		if s, ok := parseCodex(p, now, true, scope); ok {
 			out = append(out, model.SessionObservation{Session: s})
 		}
 	}
 	return out, nil
+}
+
+// rootScope decides whether a session cwd falls within any configured search
+// root. Roots are cleaned and symlink-resolved so they agree with the canonical
+// paths the git/fs producers report; the CC sanitized-directory pre-filter lets
+// whole out-of-scope buckets be skipped without opening their transcripts.
+type rootScope struct {
+	roots     []string // cleaned, symlink-resolved absolute roots
+	sanitized []string // roots run through the CC directory-name sanitizer
+}
+
+func newRootScope(roots []string) rootScope {
+	var s rootScope
+	for _, r := range roots {
+		clean := filepath.Clean(r)
+		if real, err := filepath.EvalSymlinks(clean); err == nil {
+			clean = real
+		}
+		s.roots = append(s.roots, clean)
+		s.sanitized = append(s.sanitized, sanitizeCCDir(clean))
+	}
+	return s
+}
+
+// contains reports whether cwd is one of, or nested under, a search root.
+func (s rootScope) contains(cwd string) bool {
+	cwd = filepath.Clean(cwd)
+	for _, r := range s.roots {
+		if cwd == r || strings.HasPrefix(cwd, r+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// bucketMaybeInScope is the cheap CC pre-filter: it reports whether a sanitized
+// project-directory name COULD map to a cwd within a search root. The sanitizer
+// is lossy (several characters collapse to '-'), so this may yield false
+// positives — those are settled by contains() once the real cwd is recovered —
+// but never a false negative, so no in-scope transcript is ever skipped unread.
+func (s rootScope) bucketMaybeInScope(dirName string) bool {
+	for _, sr := range s.sanitized {
+		if strings.HasPrefix(dirName, sr) {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeCCDir applies Claude Code's lossy project-directory naming: every '/',
+// '_', and '.' in the absolute cwd collapses to '-' (docs/session-format.md).
+// sanitize(root+"/sub") == sanitize(root)+"-"+sanitize(sub), so a cwd within a
+// root always sanitizes to a string prefixed by the root's sanitized form.
+func sanitizeCCDir(path string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '_', '.':
+			return '-'
+		}
+		return r
+	}, path)
 }
 
 func globIgnoreMissing(pattern string) []string {
@@ -120,7 +193,9 @@ func parseClaudeCode(path string, now time.Time) (model.Session, bool) {
 // parseCodex reads a Codex rollout file: session_meta (first line) is the
 // canonical cwd/branch source, and the last record's top-level timestamp is the
 // last activity. archived marks the session as never-running regardless of mtime.
-func parseCodex(path string, now time.Time, archived bool) (model.Session, bool) {
+// cwd is recoverable from the first line, so an out-of-scope session is dropped
+// there — the rest of the file is never read.
+func parseCodex(path string, now time.Time, archived bool, scope rootScope) (model.Session, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return model.Session{}, false
@@ -153,6 +228,11 @@ func parseCodex(path string, now time.Time, archived bool) (model.Session, bool)
 			first = false
 			if r.Type == "session_meta" {
 				cwd = r.Payload.Cwd
+			}
+			// cwd is known from the canonical first line; a session with no cwd or
+			// one outside every search root is dropped without reading the rest.
+			if cwd == "" || !scope.contains(cwd) {
+				return model.Session{}, false
 			}
 		}
 		if r.Timestamp != "" {

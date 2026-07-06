@@ -50,7 +50,7 @@ func project() (model.ProjectionEnvelope, error) {
 	if err != nil {
 		return model.ProjectionEnvelope{}, err
 	}
-	sessObs, err := session.Observe()
+	sessObs, err := session.Observe(cfg.SearchRoots)
 	if err != nil {
 		return model.ProjectionEnvelope{}, err
 	}
@@ -94,8 +94,9 @@ func promoteUnresolved(tasks []model.Task) []model.Unresolved {
 // checkouts); they are deduped by path, not identity, because git and fs assign a
 // repo divergent identities (remote-based vs path-based) that only its path
 // unifies. Worktrees counts every working tree git enumerates, the primary
-// checkout included. Sessions counts every discovered session, including
-// cwd-unmatched ones that bind to no task.
+// checkout included. Sessions counts every in-scope discovered session (those
+// within a configured search root), matched to a task or not; out-of-scope
+// sessions are dropped upstream and never reach here.
 func scanStats(obs model.Observations, tasks []model.Task, d time.Duration) model.ScanStats {
 	repos := map[string]bool{}
 	worktrees := map[string]bool{}

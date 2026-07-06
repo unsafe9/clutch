@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ func TestObserveMissingDirs(t *testing.T) {
 		filepath.Join(dir, "nope-cc"),
 		filepath.Join(dir, "nope-codex"),
 		filepath.Join(dir, "nope-archived"),
+		[]string{dir},
 		time.Now(),
 	)
 	if err != nil {
@@ -80,7 +82,7 @@ func TestObserveParsesBothHosts(t *testing.T) {
 `
 	writeFile(t, filepath.Join(archived, "rollout-2026-06-15T01-00-00-old.jsonl"), archivedRollout)
 
-	obs, err := observe(cc, codex, archived, now)
+	obs, err := observe(cc, codex, archived, []string{"/work"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +128,7 @@ func TestRunningThreshold(t *testing.T) {
 `
 	writeFile(t, filepath.Join(cc, "-work-stale", "s.jsonl"), transcript)
 
-	obs, err := observe(cc, filepath.Join(dir, "none"), filepath.Join(dir, "none2"), now)
+	obs, err := observe(cc, filepath.Join(dir, "none"), filepath.Join(dir, "none2"), []string{"/work"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,16 +147,17 @@ func TestRunningRuleEdges(t *testing.T) {
 	cc := filepath.Join(dir, "cc")
 	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
 
-	// Exactly at the threshold edge -> running (boundary is inclusive).
+	// Exactly at the threshold edge -> running (boundary is inclusive). The
+	// bucket name is the sanitized cwd so it survives the in-scope pre-filter.
 	edgeTS := now.Add(-RunningThreshold).Format(time.RFC3339Nano)
-	writeFile(t, filepath.Join(cc, "-edge", "s.jsonl"),
+	writeFile(t, filepath.Join(cc, "-work-edge", "s.jsonl"),
 		`{"type":"user","cwd":"/work/edge","timestamp":"`+edgeTS+`"}`+"\n")
 
 	// A record with a cwd but no timestamp -> zero LastActivity -> not running.
-	writeFile(t, filepath.Join(cc, "-nots", "s.jsonl"),
+	writeFile(t, filepath.Join(cc, "-work-nots", "s.jsonl"),
 		`{"type":"user","cwd":"/work/nots"}`+"\n")
 
-	obs, err := observe(cc, filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), now)
+	obs, err := observe(cc, filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), []string{"/work"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +185,7 @@ func TestArchivedNeverRunningRecent(t *testing.T) {
 		`{"timestamp":"`+fresh+`","type":"session_meta","payload":{"id":"z","cwd":"/work/arch"}}`+"\n"+
 			`{"timestamp":"`+fresh+`","type":"response_item","payload":{}}`+"\n")
 
-	obs, err := observe(filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), archived, now)
+	obs, err := observe(filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), archived, []string{"/work"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,14 +202,16 @@ func TestMalformedFilesSkipped(t *testing.T) {
 	now := time.Now()
 
 	// Garbage lines: not JSON. CC needs a cwd, so this file is skipped entirely.
-	writeFile(t, filepath.Join(cc, "-bad", "broken.jsonl"), "not json\n{also bad\n")
+	// Buckets are named to survive the in-scope pre-filter so the parse-skip path
+	// (not the scope filter) is what drops these files.
+	writeFile(t, filepath.Join(cc, "-work-bad", "broken.jsonl"), "not json\n{also bad\n")
 	// CC valid file with no cwd anywhere -> skipped.
-	writeFile(t, filepath.Join(cc, "-nocwd", "n.jsonl"), `{"type":"mode"}`+"\n")
+	writeFile(t, filepath.Join(cc, "-work-nocwd", "n.jsonl"), `{"type":"mode"}`+"\n")
 	// Codex file whose first line is not session_meta -> no cwd -> skipped.
 	writeFile(t, filepath.Join(codex, "2026", "06", "16", "rollout-x.jsonl"),
 		`{"timestamp":"`+now.Format(time.RFC3339Nano)+`","type":"event_msg","payload":{}}`+"\n")
 
-	obs, err := observe(cc, codex, filepath.Join(dir, "none"), now)
+	obs, err := observe(cc, codex, filepath.Join(dir, "none"), []string{"/work"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,18 +241,85 @@ func TestBranchFromGit(t *testing.T) {
 	run("add", ".")
 	run("commit", "-q", "-m", "init")
 
+	// Use the symlink-resolved repo path so the recorded cwd, the sanitized CC
+	// bucket, and the (symlink-resolved) search root all agree.
+	if real, err := filepath.EvalSymlinks(repo); err == nil {
+		repo = real
+	}
+
 	dir := t.TempDir()
 	cc := filepath.Join(dir, "cc")
 	now := time.Now()
 	transcript := `{"type":"user","cwd":"` + repo + `","timestamp":"` + now.Format(time.RFC3339Nano) + `"}` + "\n"
-	writeFile(t, filepath.Join(cc, "-repo", "s.jsonl"), transcript)
+	writeFile(t, filepath.Join(cc, sanitizeCCDir(repo), "s.jsonl"), transcript)
 
-	obs, err := observe(cc, filepath.Join(dir, "none"), filepath.Join(dir, "none2"), now)
+	obs, err := observe(cc, filepath.Join(dir, "none"), filepath.Join(dir, "none2"), []string{repo}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := find(t, obs, "claude-code", repo)
 	if s.Branch != "feature/x" {
 		t.Errorf("Branch = %q, want feature/x", s.Branch)
+	}
+}
+
+// TestObserveScopedToRoots verifies that only sessions whose cwd lies within a
+// configured search root are returned — both hosts — and out-of-scope sessions
+// (the common case: global CC/Codex sessions unrelated to the scanned roots) are
+// dropped rather than surfaced.
+func TestObserveScopedToRoots(t *testing.T) {
+	dir := t.TempDir()
+	cc := filepath.Join(dir, "cc")
+	codex := filepath.Join(dir, "codex")
+	now := time.Now()
+	ts := now.Format(time.RFC3339Nano)
+
+	// In-scope CC session under /root.
+	writeFile(t, filepath.Join(cc, "-root-in", "s.jsonl"),
+		`{"type":"user","cwd":"/root/in","timestamp":"`+ts+`"}`+"\n")
+	// Out-of-scope CC session: bucket and cwd both outside /root.
+	writeFile(t, filepath.Join(cc, "-other-out", "s.jsonl"),
+		`{"type":"user","cwd":"/other/out","timestamp":"`+ts+`"}`+"\n")
+	// In-scope Codex session under /root.
+	writeFile(t, filepath.Join(codex, "2026", "06", "16", "rollout-a.jsonl"),
+		`{"timestamp":"`+ts+`","type":"session_meta","payload":{"id":"a","cwd":"/root/beta"}}`+"\n")
+	// Out-of-scope Codex session -> dropped at the first line.
+	writeFile(t, filepath.Join(codex, "2026", "06", "16", "rollout-b.jsonl"),
+		`{"timestamp":"`+ts+`","type":"session_meta","payload":{"id":"b","cwd":"/elsewhere"}}`+"\n")
+
+	obs, err := observe(cc, codex, filepath.Join(dir, "none"), []string{"/root"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 2 {
+		t.Fatalf("want 2 in-scope sessions, got %d: %+v", len(obs), obs)
+	}
+	for _, o := range obs {
+		if !strings.HasPrefix(o.Session.Cwd, "/root") {
+			t.Errorf("out-of-scope session leaked: %q", o.Session.Cwd)
+		}
+	}
+}
+
+// TestObserveBucketPrefilterSettledByCwd proves the two-stage CC scope check: a
+// sibling directory (/root/apple) sanitizes to a bucket prefixed by the root's
+// sanitized form (/root/app -> "-root-app"), so it survives the cheap pre-filter
+// but is dropped by the definitive path check, since it is not nested under the
+// root.
+func TestObserveBucketPrefilterSettledByCwd(t *testing.T) {
+	dir := t.TempDir()
+	cc := filepath.Join(dir, "cc")
+	now := time.Now()
+	ts := now.Format(time.RFC3339Nano)
+
+	writeFile(t, filepath.Join(cc, "-root-apple", "s.jsonl"),
+		`{"type":"user","cwd":"/root/apple","timestamp":"`+ts+`"}`+"\n")
+
+	obs, err := observe(cc, filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), []string{"/root/app"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 0 {
+		t.Fatalf("sibling path surviving the pre-filter must be settled out, got %+v", obs)
 	}
 }
