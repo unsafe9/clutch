@@ -38,21 +38,37 @@ type AppraisalReader interface {
 	Appraisals(taskID string) ([]model.Appraisal, error)
 }
 
+// Result is the correlation output: the projected tasks plus the scan-wide
+// unresolved flags that belong to no single task (e.g. an in-scope session whose
+// cwd matched no repo/worktree). Per-task flags live on each Task.Unresolved;
+// scan-wide flags are returned here separately rather than parked on an arbitrary
+// task. The envelope's diagnostics.unresolved is the union of the two.
+type Result struct {
+	Tasks    []model.Task
+	ScanWide []model.Unresolved
+}
+
 // Correlate is the deterministic projection step: raw observations, the id
 // resolver, and the appraisal cache in, correlated Tasks out. Pure — no IO, no
 // git/fs/LLM.
-func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReader) ([]model.Task, error) {
+func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReader) (Result, error) {
 	b := newBuilder()
 
 	if err := b.ingestGit(obs.Git, ids); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	if err := b.ingestFS(obs.FS, ids); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	b.ingestSessions(obs.Sessions)
 
-	return b.finalize(appraisals)
+	tasks, err := b.finalize(appraisals)
+	if err != nil {
+		return Result{}, err
+	}
+	scanWide := b.unmatchedSessions
+	sortUnresolved(scanWide)
+	return Result{Tasks: tasks, ScanWide: scanWide}, nil
 }
 
 // builder accumulates per-id task state while observations are ingested, plus
@@ -357,15 +373,6 @@ func (b *builder) finalize(appraisals AppraisalReader) ([]model.Task, error) {
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 
-	// Scan-wide unmatched-session flags have no owning task. The contract models
-	// such flags with an empty TaskID; the only Task-bound carrier is a task, so
-	// they are attached to the lexically-first task (after the ID sort) for
-	// deterministic surfacing, with TaskID left empty to mark them scan-wide.
-	if len(b.unmatchedSessions) > 0 && len(out) > 0 {
-		out[0].Unresolved = append(out[0].Unresolved, b.unmatchedSessions...)
-		sortReps(&out[0])
-	}
-
 	return out, nil
 }
 
@@ -515,11 +522,17 @@ func sortReps(t *model.Task) {
 		}
 		return t.Links[i].Method < t.Links[j].Method
 	})
-	sort.SliceStable(t.Unresolved, func(i, j int) bool {
-		if t.Unresolved[i].Kind != t.Unresolved[j].Kind {
-			return t.Unresolved[i].Kind < t.Unresolved[j].Kind
+	sortUnresolved(t.Unresolved)
+}
+
+// sortUnresolved orders unresolved flags by (kind, detail) so the projection is
+// reproducible across runs. Shared by per-task sorting and the scan-wide list.
+func sortUnresolved(u []model.Unresolved) {
+	sort.SliceStable(u, func(i, j int) bool {
+		if u[i].Kind != u[j].Kind {
+			return u[i].Kind < u[j].Kind
 		}
-		return t.Unresolved[i].Detail < t.Unresolved[j].Detail
+		return u[i].Detail < u[j].Detail
 	})
 }
 

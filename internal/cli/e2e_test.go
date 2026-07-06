@@ -58,7 +58,7 @@ func TestGoldenE2E(t *testing.T) {
 		obs := model.Observations{Git: gitObs, FS: fsObs, Sessions: nil}
 
 		backend := file.New(storeDir)
-		tasks, err := correlate.Correlate(obs, backend, backend)
+		res, err := correlate.Correlate(obs, backend, backend)
 		if err != nil {
 			t.Fatalf("correlate.Correlate: %v", err)
 		}
@@ -68,10 +68,10 @@ func TestGoldenE2E(t *testing.T) {
 		env := model.ProjectionEnvelope{
 			SchemaVersion: model.SchemaVersion,
 			GeneratedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-			Tasks:         tasks,
+			Tasks:         res.Tasks,
 			Diagnostics: model.Diagnostics{
-				Unresolved: promoteUnresolved(tasks),
-				ScanStats:  scanStats(obs, tasks, 0),
+				Unresolved: promoteUnresolved(res.Tasks, res.ScanWide),
+				ScanStats:  scanStats(obs, res.Tasks, 0),
 			},
 		}
 

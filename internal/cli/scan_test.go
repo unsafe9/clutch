@@ -8,14 +8,12 @@ import (
 	"github.com/unsafe9/clutch/internal/model"
 )
 
-// promoteUnresolved flattens per-task flags to the envelope in projection order
-// and preserves each flag's TaskID — an empty TaskID (a scan-wide flag parked on
-// the lexically-first task) must stay empty, not get stamped with the carrier's
-// id.
+// promoteUnresolved unions per-task flags (in projection task order, each keeping
+// its own TaskID) with the scan-wide flags, which are passed separately and
+// appended last with their empty TaskID intact.
 func TestPromoteUnresolved(t *testing.T) {
 	tasks := []model.Task{
 		{ID: "t1", Unresolved: []model.Unresolved{
-			{Kind: model.UnresolvedSession, Detail: "scan-wide", TaskID: ""},
 			{Kind: model.UnresolvedIdentity, Detail: "bound to t1", TaskID: "t1"},
 		}},
 		{ID: "t2"},
@@ -23,8 +21,11 @@ func TestPromoteUnresolved(t *testing.T) {
 			{Kind: model.UnresolvedLineage, Detail: "bound to t3", TaskID: "t3"},
 		}},
 	}
+	scanWide := []model.Unresolved{
+		{Kind: model.UnresolvedSession, Detail: "scan-wide", TaskID: ""},
+	}
 
-	got := promoteUnresolved(tasks)
+	got := promoteUnresolved(tasks, scanWide)
 	if len(got) != 3 {
 		t.Fatalf("promoteUnresolved len = %d, want 3: %+v", len(got), got)
 	}
@@ -32,9 +33,9 @@ func TestPromoteUnresolved(t *testing.T) {
 		detail string
 		taskID string
 	}{
-		{"scan-wide", ""},
 		{"bound to t1", "t1"},
 		{"bound to t3", "t3"},
+		{"scan-wide", ""},
 	}
 	for i, w := range want {
 		if got[i].Detail != w.detail || got[i].TaskID != w.taskID {
@@ -47,7 +48,7 @@ func TestPromoteUnresolved(t *testing.T) {
 // An empty remainder must marshal as [] per the contract's machine shape, so the
 // helper returns a non-nil slice (nil would render null).
 func TestPromoteUnresolvedEmpty(t *testing.T) {
-	got := promoteUnresolved([]model.Task{{ID: "t1"}})
+	got := promoteUnresolved([]model.Task{{ID: "t1"}}, nil)
 	if len(got) != 0 {
 		t.Fatalf("promoteUnresolved with no flags = %+v, want empty", got)
 	}

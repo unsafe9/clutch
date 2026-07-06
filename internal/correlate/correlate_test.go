@@ -66,15 +66,15 @@ func gitObs(identity, path string, branches ...model.Branch) model.GitObservatio
 }
 
 func TestEmptyObservations(t *testing.T) {
-	got, err := Correlate(model.Observations{}, newFakeIDs(), fakeAppraisals{})
+	res, err := Correlate(model.Observations{}, newFakeIDs(), fakeAppraisals{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if got == nil {
+	if res.Tasks == nil {
 		t.Fatal("want non-nil empty slice, got nil")
 	}
-	if len(got) != 0 {
-		t.Fatalf("want 0 tasks, got %d", len(got))
+	if len(res.Tasks) != 0 {
+		t.Fatalf("want 0 tasks, got %d", len(res.Tasks))
 	}
 }
 
@@ -92,10 +92,11 @@ func TestGroupByBranchSignature_MintAndReuse(t *testing.T) {
 		},
 	}
 
-	got, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
+	got := res.Tasks
 	if len(got) != 2 {
 		t.Fatalf("want 2 tasks, got %d: %+v", len(got), got)
 	}
@@ -139,10 +140,11 @@ func TestRepoAnchorAndFSOnly(t *testing.T) {
 				Worktrees: []model.Worktree{{Path: "/repos/tool", Branch: "main", Repo: "acme/tool"}}},
 		},
 	}
-	got, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
+	got := res.Tasks
 	if len(got) != 2 {
 		t.Fatalf("want 2 tasks, got %d", len(got))
 	}
@@ -168,10 +170,11 @@ func TestFSEnrichesGitRepoNoNewTask(t *testing.T) {
 				Worktrees: []model.Worktree{{Path: "/repos/app/wt", Branch: "feature/x", Repo: "acme/app"}}},
 		},
 	}
-	got, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
+	got := res.Tasks
 	if len(got) != 1 {
 		t.Fatalf("want 1 task, got %d: %+v", len(got), got)
 	}
@@ -196,10 +199,11 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 			{Session: model.Session{Host: "codex", Cwd: "/elsewhere"}},
 		},
 	}
-	got, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
+	got := res.Tasks
 	if len(got) != 1 {
 		t.Fatalf("want 1 task, got %d", len(got))
 	}
@@ -221,9 +225,14 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 	if !foundLink {
 		t.Fatalf("missing session convention link: %+v", tk.Links)
 	}
-	// Unresolved session flag surfaced.
+	// The unmatched session is scan-wide, not parked on the task: the task carries
+	// no unresolved flags of its own, and the flag surfaces in res.ScanWide with an
+	// empty TaskID.
+	if len(tk.Unresolved) != 0 {
+		t.Fatalf("task should carry no unresolved flags, got %+v", tk.Unresolved)
+	}
 	foundUnres := false
-	for _, u := range tk.Unresolved {
+	for _, u := range res.ScanWide {
 		if u.Kind == model.UnresolvedSession {
 			foundUnres = true
 			if u.TaskID != "" {
@@ -232,7 +241,7 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 		}
 	}
 	if !foundUnres {
-		t.Fatalf("missing unresolved-session flag: %+v", tk.Unresolved)
+		t.Fatalf("missing scan-wide unresolved-session flag: %+v", res.ScanWide)
 	}
 }
 
@@ -252,11 +261,11 @@ func TestAppraisalFold(t *testing.T) {
 			{Kind: model.AppraisalKind("future"), Result: "ignore-me", Confidence: 0.5},
 		},
 	}}
-	got, err := Correlate(obs, ids, appr)
+	res, err := Correlate(obs, ids, appr)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	tk := got[0]
+	tk := res.Tasks[0]
 	if tk.Lifecycle != model.LifecycleStale {
 		t.Fatalf("classification not applied: lifecycle = %q", tk.Lifecycle)
 	}
@@ -286,12 +295,12 @@ func TestLineageFromBranchBase(t *testing.T) {
 			),
 		},
 	}
-	got, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	var child model.Task
-	for _, tk := range got {
+	for _, tk := range res.Tasks {
 		if tk.ID == "T-child" {
 			child = tk
 		}
@@ -312,12 +321,12 @@ func TestLifecycleFromPRState(t *testing.T) {
 			},
 		},
 	}
-	got, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if got[0].Lifecycle != model.LifecycleReview {
-		t.Fatalf("lifecycle = %q, want review", got[0].Lifecycle)
+	if res.Tasks[0].Lifecycle != model.LifecycleReview {
+		t.Fatalf("lifecycle = %q, want review", res.Tasks[0].Lifecycle)
 	}
 }
 
@@ -333,11 +342,11 @@ func TestLifecycleFromPRDetailedStatus(t *testing.T) {
 				},
 			},
 		}
-		got, err := Correlate(obs, ids, fakeAppraisals{})
+		res, err := Correlate(obs, ids, fakeAppraisals{})
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		return got[0].Lifecycle
+		return res.Tasks[0].Lifecycle
 	}
 
 	// A draft PR with changes_requested is under external review: review, not planned.
@@ -359,7 +368,7 @@ func TestLifecycleFromPRDetailedStatus(t *testing.T) {
 }
 
 func TestDeterministicOrderingAcrossRuns(t *testing.T) {
-	build := func() []model.Task {
+	build := func() Result {
 		ids := newFakeIDs()
 		ids.seed(model.Signature{Repo: "z/repo", Branch: "main"}, "Z1")
 		ids.seed(model.Signature{Repo: "a/repo", Branch: "dev"}, "A1")
@@ -375,11 +384,11 @@ func TestDeterministicOrderingAcrossRuns(t *testing.T) {
 				{Session: model.Session{Host: "claude-code", Cwd: "/nope2"}},
 			},
 		}
-		got, err := Correlate(obs, ids, fakeAppraisals{})
+		res, err := Correlate(obs, ids, fakeAppraisals{})
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		return got
+		return res
 	}
 	run1 := build()
 	run2 := build()
@@ -387,9 +396,9 @@ func TestDeterministicOrderingAcrossRuns(t *testing.T) {
 		t.Fatalf("non-deterministic output:\nrun1=%+v\nrun2=%+v", run1, run2)
 	}
 	// Tasks sorted by ID.
-	for i := 1; i < len(run1); i++ {
-		if run1[i-1].ID > run1[i].ID {
-			t.Fatalf("tasks not sorted by id: %q before %q", run1[i-1].ID, run1[i].ID)
+	for i := 1; i < len(run1.Tasks); i++ {
+		if run1.Tasks[i-1].ID > run1.Tasks[i].ID {
+			t.Fatalf("tasks not sorted by id: %q before %q", run1.Tasks[i-1].ID, run1.Tasks[i].ID)
 		}
 	}
 }

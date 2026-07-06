@@ -55,11 +55,12 @@ func project() (model.ProjectionEnvelope, error) {
 		return model.ProjectionEnvelope{}, err
 	}
 	obs := model.Observations{Git: gitObs, FS: fsObs, Sessions: sessObs}
-	tasks, err := correlate.Correlate(obs, backend, backend)
+	res, err := correlate.Correlate(obs, backend, backend)
 	if err != nil {
 		return model.ProjectionEnvelope{}, err
 	}
 	generatedAt := time.Now()
+	tasks := res.Tasks
 	// The contract's machine shape renders empty collections as [], never null.
 	if tasks == nil {
 		tasks = []model.Task{}
@@ -69,23 +70,25 @@ func project() (model.ProjectionEnvelope, error) {
 		GeneratedAt:   generatedAt,
 		Tasks:         tasks,
 		Diagnostics: model.Diagnostics{
-			Unresolved: promoteUnresolved(tasks),
+			Unresolved: promoteUnresolved(tasks, res.ScanWide),
 			ScanStats:  scanStats(obs, tasks, generatedAt.Sub(start)),
 		},
 	}, nil
 }
 
-// promoteUnresolved flattens every task's Unresolved flags to the envelope level
-// so the classify orchestrator reads the whole ambiguous remainder from the
-// diagnostics without walking each task. Flags keep their order (projection task
-// order, then per-task order) and their TaskID — empty stays empty, marking a
-// scan-wide flag per correlate's convention. The result is never nil so an empty
-// remainder marshals as [] per the contract's machine shape.
-func promoteUnresolved(tasks []model.Task) []model.Unresolved {
+// promoteUnresolved builds the envelope's whole ambiguous remainder: every task's
+// own Unresolved flags (in projection task order, then per-task order) followed by
+// the scan-wide flags that belong to no task. The classify orchestrator reads it
+// from diagnostics without walking each task. Each flag keeps its TaskID — a
+// per-task flag carries its task's id; a scan-wide flag keeps the empty id that
+// marks it. The result is never nil so an empty remainder marshals as [] per the
+// contract's machine shape.
+func promoteUnresolved(tasks []model.Task, scanWide []model.Unresolved) []model.Unresolved {
 	out := []model.Unresolved{}
 	for _, t := range tasks {
 		out = append(out, t.Unresolved...)
 	}
+	out = append(out, scanWide...)
 	return out
 }
 

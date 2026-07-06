@@ -228,6 +228,13 @@ sessions **within a configured search root** (out-of-scope sessions are neither
 read nor counted); `tasks_projected` is the projected task count; `duration_ms`
 is the wall-clock scan time.
 
+`diagnostics.unresolved` is the whole ambiguous remainder: each task's own
+`unresolved` flags (every one carrying that task's `task_id`) unioned with the
+**scan-wide** flags that belong to no single task. Scan-wide flags (empty
+`task_id`, e.g. an in-scope session that matched no repo/worktree) surface **only**
+here — they are returned separately by the correlation core, never parked on an
+arbitrary task, so no task's `unresolved` list holds a flag that is not its own.
+
 A `session`-kind `unresolved` flag is emitted only for an **in-scope** session
 whose `cwd` matched no discovered repo/worktree; sessions whose `cwd` lies outside
 every search root are dropped, never flagged — they are permanent noise the
@@ -285,7 +292,7 @@ Current: `schema_version = "0.1"`. (Go: `internal/model/projection.go`.)
   - `AppraisalReader{Appraisals(taskID) -> []Appraisal}` — reads persisted
     appraisals back so a cached classify/relation result is reused, not
     recomputed.
-  Entry point: `Correlate(obs Observations, ids IDResolver, appraisals AppraisalReader) -> ([]Task, error)`.
+  Entry point: `Correlate(obs Observations, ids IDResolver, appraisals AppraisalReader) -> (Result{Tasks, ScanWide}, error)` — `ScanWide` holds the scan-wide unresolved flags that belong to no task (the CLI unions them with per-task flags into `diagnostics.unresolved`).
   The file backend satisfies both seams (asserted in `internal/cli/wire.go`).
 - `internal/discover/*`, `internal/store/*`, `internal/adapter/*` import `model`
   (+ their own port).
