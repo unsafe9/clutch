@@ -120,6 +120,11 @@ it is **not** a global identifier. Key scheme:
 | PullRequest    | `pr:<host>#<number>`          |
 | Issue          | `issue:<tracker>/<key>`       |
 | Session        | `session:<host>/<cwd>`        |
+| Task (itself)  | `task:<id>`                   |
+
+The `task:<id>` key names the **task itself**, not a Class-② representation; it
+exists so a task-level judgment — a `classification` appraisal — has a stable
+subject (see *Board → appraisal subject by kind*).
 
 ### Class ③ Relations & correlation — MIXED: derived + declared + appraisal
 
@@ -204,6 +209,15 @@ Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 | `design`     | string        | evolving design that converges to final; decisions overwrite/accumulate; engineering altitude, NO code |
 | `adrs`       | []ADR         | `{decision, context, alternatives[], consequence}`        |
 | `appraisals` | []Appraisal   | `{kind, subject, result, confidence, input_fingerprint, computed_at}` — cache of classify / inferred-relation results; `kind` is an `AppraisalKind`, `subject` is the RepRef appraised, `input_fingerprint` + `computed_at` let a cached appraisal be invalidated when its inputs change |
+
+**Appraisal subject by kind.** A `classification` appraisal is a task-level
+judgment, so its `subject` is the **task itself** — `task:<id>`, where `<id>` is
+the appraised task's id. `relation` and `link` appraisals keep a **representation**
+`RepRef` subject (the representation the edge or link concerns). Because
+`AddAppraisal` upserts by `kind`+`subject`, the `task:<id>` subject keeps exactly
+**one** classification per task, and correlation folds it back by that subject.
+The CLI's `board appraise` **rejects** a `classification` whose `subject` is not
+`task:<task-id>` (the command's task argument).
 
 ### BoardStore port
 

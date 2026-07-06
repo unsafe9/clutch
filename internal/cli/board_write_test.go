@@ -52,7 +52,7 @@ func TestAppraiseWritesAndReadsBack(t *testing.T) {
 
 	if _, err := execCmd(t, store, "board", "appraise", "task2",
 		"--kind", "classification",
-		"--subject", "branch:alpha/main",
+		"--subject", "task:task2",
 		"--result", "active",
 		"--confidence", "0.8",
 		"--fingerprint", "fp1",
@@ -72,7 +72,7 @@ func TestAppraiseWritesAndReadsBack(t *testing.T) {
 		t.Fatalf("appraisals = %d, want 1\n%s", len(b.Appraisals), out)
 	}
 	a := b.Appraisals[0]
-	if a.Kind != model.AppraisalClassification || a.Subject != "branch:alpha/main" ||
+	if a.Kind != model.AppraisalClassification || a.Subject != "task:task2" ||
 		a.Result != "active" || a.Confidence != 0.8 || a.InputFingerprint != "fp1" {
 		t.Fatalf("appraisal mismatch: %+v", a)
 	}
@@ -99,6 +99,50 @@ func TestAppraiseRejectsBadKindAndConfidence(t *testing.T) {
 	if _, err := execCmd(t, store, "board", "appraise", "task3",
 		"--kind", "classification", "--result", "bogus", "--confidence", "0.5", "--yes"); err == nil {
 		t.Fatal("appraise classification with non-lifecycle result = nil, want error")
+	}
+}
+
+func TestAppraiseClassificationSubjectRules(t *testing.T) {
+	store := t.TempDir()
+
+	// Accept: classification whose subject is the task itself (task:<task-id>).
+	if _, err := execCmd(t, store, "board", "appraise", "taskC",
+		"--kind", "classification", "--subject", "task:taskC",
+		"--result", "active", "--confidence", "0.5", "--yes"); err != nil {
+		t.Fatalf("classification with task:<id> subject rejected: %v", err)
+	}
+
+	// Reject: subject naming a different task.
+	if _, err := execCmd(t, store, "board", "appraise", "taskC",
+		"--kind", "classification", "--subject", "task:other",
+		"--result", "active", "--confidence", "0.5", "--yes"); err == nil {
+		t.Fatal("classification with foreign task subject = nil, want error")
+	}
+
+	// Reject: a representation-ref subject.
+	if _, err := execCmd(t, store, "board", "appraise", "taskC",
+		"--kind", "classification", "--subject", "branch:acme/app/main",
+		"--result", "active", "--confidence", "0.5", "--yes"); err == nil {
+		t.Fatal("classification with representation subject = nil, want error")
+	}
+
+	// Reject: missing subject.
+	if _, err := execCmd(t, store, "board", "appraise", "taskC",
+		"--kind", "classification",
+		"--result", "active", "--confidence", "0.5", "--yes"); err == nil {
+		t.Fatal("classification with empty subject = nil, want error")
+	}
+
+	// Unchanged: relation/link keep representation-ref subjects.
+	if _, err := execCmd(t, store, "board", "appraise", "taskC",
+		"--kind", "relation", "--subject", "branch:acme/app/main",
+		"--result", "depends:taskD", "--confidence", "0.5", "--yes"); err != nil {
+		t.Fatalf("relation with representation subject rejected: %v", err)
+	}
+	if _, err := execCmd(t, store, "board", "appraise", "taskC",
+		"--kind", "link", "--subject", "branch:acme/app/main",
+		"--result", "branch:acme/app/main", "--confidence", "0.5", "--yes"); err != nil {
+		t.Fatalf("link with representation subject rejected: %v", err)
 	}
 }
 

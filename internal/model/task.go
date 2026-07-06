@@ -81,6 +81,9 @@ type Task struct {
 //	pr:<host>#<number>         — a PullRequest
 //	issue:<tracker>/<key>      — an Issue
 //	session:<host>/<cwd>       — a Session
+//	task:<id>                  — the task itself, used as a classification
+//	                             appraisal's subject (a task-level judgment
+//	                             concerns no single representation)
 type RepRef string
 
 // RepoRef identifies a clone/checkout this task spans.

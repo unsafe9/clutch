@@ -555,9 +555,11 @@ func foldAppraisals(t *model.Task, appraisals AppraisalReader) error {
 	for _, a := range apps {
 		switch a.Kind {
 		case model.AppraisalClassification:
-			// A cached classification overrides the deterministic default
-			// lifecycle when present.
-			if a.Result != "" {
+			// A classification is a task-level judgment keyed by the task:<id>
+			// subject (the store upsert guarantees exactly one per task). Ignore
+			// any whose subject is not this task; a matching one overrides the
+			// deterministic default lifecycle.
+			if a.Subject == taskRef(t.ID) && a.Result != "" {
 				t.Lifecycle = model.Lifecycle(a.Result)
 			}
 		case model.AppraisalRelation:
@@ -737,3 +739,6 @@ func issueRef(tracker, key string) model.RepRef {
 func sessionRef(s model.Session) model.RepRef {
 	return model.RepRef("session:" + s.Host + "/" + s.Cwd)
 }
+
+// taskRef keys the task itself, the subject of a classification appraisal.
+func taskRef(id string) model.RepRef { return model.RepRef("task:" + id) }

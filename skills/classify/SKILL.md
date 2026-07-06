@@ -83,10 +83,14 @@ clutch board appraise <task-id> --kind <k> --subject <ref> \
 
 - `<task-id>` — the task the appraisal concerns.
 - `--kind` — one of `classification | relation | link`.
-- `--subject` — the RepRef the appraisal concerns, taken from the unresolved
-  `refs`. RepRefs are keyed `repo:<identity>`, `branch:<identity>/<name>`,
-  `worktree:<path>`, `pr:<host>#<number>`, `issue:<tracker>/<key>`, or
-  `session:<host>/<cwd>`.
+- `--subject` — the RepRef the appraisal concerns, per kind:
+  - **classification** → always `task:<task-id>`, the task itself — a lifecycle
+    verdict judges the whole task, not one representation. Use the same id you
+    pass as `<task-id>`; the CLI rejects any other subject for this kind.
+  - **relation / link** → the representation RepRef the edge or link concerns,
+    taken from the unresolved `refs`. RepRefs are keyed `repo:<identity>`,
+    `branch:<identity>/<name>`, `worktree:<path>`, `pr:<host>#<number>`,
+    `issue:<tracker>/<key>`, or `session:<host>/<cwd>`.
 - `--result` — per the kind, in the formats above.
 - `--confidence` — a value in `[0,1)`; appraisal is never 1.0 (that is reserved
   for deterministic convention/declared verdicts). Use it to say how strongly the

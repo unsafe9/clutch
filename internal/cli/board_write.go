@@ -173,8 +173,15 @@ func newAppraiseCmd() *cobra.Command {
 			if !knownAppraisalKind(kind) {
 				return fmt.Errorf("--kind %q is not a known appraisal kind (classification|relation|link)", kind)
 			}
-			if kind == string(model.AppraisalClassification) && !knownLifecycle(result) {
-				return fmt.Errorf("--result %q is not a known lifecycle for a classification appraisal", result)
+			if kind == string(model.AppraisalClassification) {
+				if !knownLifecycle(result) {
+					return fmt.Errorf("--result %q is not a known lifecycle for a classification appraisal", result)
+				}
+				// A classification is a task-level judgment: its subject is the
+				// task itself (task:<task-id>), not a representation ref.
+				if want := "task:" + args[0]; subject != want {
+					return fmt.Errorf("--subject %q is invalid for a classification appraisal; it must be %q (the task being classified)", subject, want)
+				}
 			}
 			s, err := openStore()
 			if err != nil {

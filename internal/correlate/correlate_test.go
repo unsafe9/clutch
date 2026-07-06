@@ -534,7 +534,10 @@ func TestAppraisalFold(t *testing.T) {
 	}
 	appr := fakeAppraisals{byID: map[string][]model.Appraisal{
 		"T-app": {
-			{Kind: model.AppraisalClassification, Result: "stale", Confidence: 0.7},
+			{Kind: model.AppraisalClassification, Subject: "task:T-app", Result: "stale", Confidence: 0.7},
+			// A classification with a foreign subject must be ignored (keyed by
+			// subject, not last-wins).
+			{Kind: model.AppraisalClassification, Subject: "task:T-other", Result: "done", Confidence: 0.9},
 			{Kind: model.AppraisalRelation, Result: "depends:T-other", Confidence: 0.6},
 			{Kind: model.AppraisalLink, Subject: "branch:acme/app/main", Confidence: 0.8},
 			{Kind: model.AppraisalKind("future"), Result: "ignore-me", Confidence: 0.5},
@@ -546,7 +549,7 @@ func TestAppraisalFold(t *testing.T) {
 	}
 	tk := res.Tasks[0]
 	if tk.Lifecycle != model.LifecycleStale {
-		t.Fatalf("classification not applied: lifecycle = %q", tk.Lifecycle)
+		t.Fatalf("classification not applied by subject: lifecycle = %q, want stale", tk.Lifecycle)
 	}
 	if !reflect.DeepEqual(tk.Relations.Depends, []string{"T-other"}) {
 		t.Fatalf("relation not applied: %+v", tk.Relations)
