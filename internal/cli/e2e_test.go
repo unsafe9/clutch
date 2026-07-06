@@ -58,7 +58,7 @@ func TestGoldenE2E(t *testing.T) {
 		obs := model.Observations{Git: gitObs, FS: fsObs, Sessions: nil}
 
 		backend := file.New(storeDir)
-		res, err := correlate.Correlate(obs, backend, backend, backend)
+		res, err := correlate.Correlate(obs, backend, backend, backend, backend)
 		if err != nil {
 			t.Fatalf("correlate.Correlate: %v", err)
 		}

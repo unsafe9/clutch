@@ -466,6 +466,16 @@ func (s *Store) Appraisals(taskID string) ([]model.Appraisal, error) {
 	return b.Appraisals, nil
 }
 
+// HasDesign implements correlate.DesignReader: reports whether taskID's board
+// carries a non-empty design (a whitespace-only design counts as empty).
+func (s *Store) HasDesign(taskID string) (bool, error) {
+	b, err := s.Get(taskID)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(b.Design) != "", nil
+}
+
 // newID allocates a fresh collision-free id. Caller holds mu.
 func (s *Store) newID() (string, error) {
 	for {

@@ -69,6 +69,16 @@ func (f fakeInitiated) InitiatedTasks() ([]model.InitiatedTask, error) {
 	return f.tasks, nil
 }
 
+// fakeDesigns is a canned DesignReader: HasDesign reports true only for the
+// listed task ids (a nil map means no task has a board design).
+type fakeDesigns struct {
+	withDesign map[string]bool
+}
+
+func (f fakeDesigns) HasDesign(taskID string) (bool, error) {
+	return f.withDesign[taskID], nil
+}
+
 func gitObs(identity, path string, branches ...model.Branch) model.GitObservation {
 	return model.GitObservation{
 		Repo:     model.RepoRef{Identity: identity, Path: path, Remote: "git@github.com:" + identity + ".git"},
@@ -77,7 +87,7 @@ func gitObs(identity, path string, branches ...model.Branch) model.GitObservatio
 }
 
 func TestEmptyObservations(t *testing.T) {
-	res, err := Correlate(model.Observations{}, newFakeIDs(), fakeAppraisals{}, nil)
+	res, err := Correlate(model.Observations{}, newFakeIDs(), fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -101,7 +111,7 @@ func TestMaterializeInitiatedTask(t *testing.T) {
 			gitObs("acme/app", "/repos/app", model.Branch{Repo: "acme/app", Name: "main", Head: "aaa"}),
 		},
 	}
-	res, err := Correlate(obs, newFakeIDs(), fakeAppraisals{}, initiated)
+	res, err := Correlate(obs, newFakeIDs(), fakeAppraisals{}, fakeDesigns{}, initiated)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -150,7 +160,7 @@ func TestInitiatedTaskYieldsToObservation(t *testing.T) {
 			gitObs("acme/app", "/repos/app", model.Branch{Repo: "acme/app", Name: "main", Head: "aaa"}),
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, initiated)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, initiated)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -181,7 +191,7 @@ func TestGroupByBranchSignature_MintAndReuse(t *testing.T) {
 		},
 	}
 
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -229,7 +239,7 @@ func TestRepoAnchorAndFSOnly(t *testing.T) {
 				Worktrees: []model.Worktree{{Path: "/repos/tool", Branch: "main", Repo: "acme/tool"}}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -260,7 +270,7 @@ func TestFSEnrichesGitRepoNoNewTask(t *testing.T) {
 				Worktrees: []model.Worktree{{Path: "/repos/app/wt", Branch: "main", Repo: "acme/app"}}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -314,7 +324,7 @@ func TestRepoWithRemoteCollapsesToOneRep(t *testing.T) {
 			{Repo: model.RepoRef{Identity: "local/app", Path: "/repos/app"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -356,7 +366,7 @@ func TestRepoWithoutRemoteSurfacesOnce(t *testing.T) {
 			{Repo: model.RepoRef{Identity: "local/app", Path: "/repos/app"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -388,7 +398,7 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 			{Session: model.Session{Host: "codex", Cwd: "/elsewhere"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -471,7 +481,7 @@ func TestSessionBindsByBranch(t *testing.T) {
 			{Session: model.Session{Host: "codex", Cwd: "/repos/app", Branch: "gone"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -510,7 +520,7 @@ func TestWorktreeAttachesOnlyToItsBranchTask(t *testing.T) {
 			},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -543,7 +553,7 @@ func TestAppraisalFold(t *testing.T) {
 			{Kind: model.AppraisalKind("future"), Result: "ignore-me", Confidence: 0.5},
 		},
 	}}
-	res, err := Correlate(obs, ids, appr, nil)
+	res, err := Correlate(obs, ids, appr, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -577,7 +587,7 @@ func TestLineageFromBranchBase(t *testing.T) {
 			),
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -603,7 +613,7 @@ func TestLifecycleFromPRState(t *testing.T) {
 			},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -624,7 +634,7 @@ func TestLifecycleFromPRDetailedStatus(t *testing.T) {
 				},
 			},
 		}
-		res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+		res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -666,7 +676,7 @@ func TestDeterministicOrderingAcrossRuns(t *testing.T) {
 				{Session: model.Session{Host: "claude-code", Cwd: "/nope2"}},
 			},
 		}
-		res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
+		res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}

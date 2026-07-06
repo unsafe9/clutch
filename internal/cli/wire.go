@@ -17,6 +17,7 @@ var (
 	_ store.IDRegistry              = (*file.Store)(nil)
 	_ correlate.IDResolver          = (*file.Store)(nil)
 	_ correlate.AppraisalReader     = (*file.Store)(nil)
+	_ correlate.DesignReader        = (*file.Store)(nil)
 	_ correlate.InitiatedTaskReader = (*file.Store)(nil)
 	_ adapter.IssueTracker          = (*github.Tracker)(nil)
 )

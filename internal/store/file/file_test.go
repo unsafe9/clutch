@@ -11,8 +11,11 @@ import (
 	"github.com/unsafe9/clutch/internal/store"
 )
 
-// *Store must satisfy the appraisal-reader seam too.
-var _ correlate.AppraisalReader = (*Store)(nil)
+// *Store must satisfy the appraisal-reader and design-reader seams too.
+var (
+	_ correlate.AppraisalReader = (*Store)(nil)
+	_ correlate.DesignReader    = (*Store)(nil)
+)
 
 func TestGetMissingBoardIsEmpty(t *testing.T) {
 	s := New(t.TempDir())
@@ -323,6 +326,29 @@ func TestAppraisalsReadBack(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Result != "feature" || got[0].Subject != model.RepRef("branch:r/main") {
 		t.Fatalf("appraisals = %+v", got)
+	}
+}
+
+func TestHasDesign(t *testing.T) {
+	s := New(t.TempDir())
+
+	// No board yet → no design.
+	if has, err := s.HasDesign("t"); err != nil || has {
+		t.Fatalf("HasDesign(empty) = %v, %v; want false, nil", has, err)
+	}
+	// A whitespace-only design still counts as empty.
+	if err := s.SetDesign("t", "  \n\t "); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := s.HasDesign("t"); err != nil || has {
+		t.Fatalf("HasDesign(whitespace) = %v, %v; want false, nil", has, err)
+	}
+	// A real design reads as present.
+	if err := s.SetDesign("t", "layered store"); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := s.HasDesign("t"); err != nil || !has {
+		t.Fatalf("HasDesign(design) = %v, %v; want true, nil", has, err)
 	}
 }
 

@@ -38,6 +38,17 @@ type AppraisalReader interface {
 	Appraisals(taskID string) ([]model.Appraisal, error)
 }
 
+// DesignReader reports whether a task's board carries a non-empty design — the
+// board-visibility signal correlation needs to derive the `planned` lifecycle (a
+// task with no git activity of its own but a board design was planned, not left
+// an idea) and to suppress the new-vs-merged classification flag when a design
+// already resolves the ambiguity. It is a consumer-defined interface over model
+// types; the file backend satisfies it.
+type DesignReader interface {
+	// HasDesign reports whether taskID's board design is non-empty.
+	HasDesign(taskID string) (bool, error)
+}
+
 // InitiatedTaskReader lists clutch-initiated tasks — ones created directly
 // through the CLI (`clutch task new`) that may have no git/fs/session
 // representation yet. Correlation materializes any that no observation produced
@@ -59,9 +70,10 @@ type Result struct {
 }
 
 // Correlate is the deterministic projection step: raw observations, the id
-// resolver, the appraisal cache, and the clutch-initiated task set in,
-// correlated Tasks out. Pure — no IO, no git/fs/LLM.
-func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReader, initiated InitiatedTaskReader) (Result, error) {
+// resolver, the appraisal cache, the board-design visibility seam, and the
+// clutch-initiated task set in, correlated Tasks out. Pure — no IO, no
+// git/fs/LLM.
+func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReader, designs DesignReader, initiated InitiatedTaskReader) (Result, error) {
 	b := newBuilder()
 
 	if err := b.ingestGit(obs.Git, ids); err != nil {
@@ -72,7 +84,7 @@ func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReade
 	}
 	b.ingestSessions(obs.Sessions)
 
-	tasks, err := b.finalize(appraisals, initiated)
+	tasks, err := b.finalize(appraisals, designs, initiated)
 	if err != nil {
 		return Result{}, err
 	}
@@ -471,7 +483,7 @@ func (b *builder) indexBranchName(repoIdentity, name, id string) {
 
 // ── finalize: lineage, appraisal fold, deterministic ordering ─────────────────
 
-func (b *builder) finalize(appraisals AppraisalReader, initiated InitiatedTaskReader) ([]model.Task, error) {
+func (b *builder) finalize(appraisals AppraisalReader, designs DesignReader, initiated InitiatedTaskReader) ([]model.Task, error) {
 	// Lineage: a branch's Base mapping to another task's branch head makes that
 	// other task a parent.
 	for _, id := range b.order {

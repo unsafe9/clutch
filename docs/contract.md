@@ -381,16 +381,20 @@ Current: `schema_version = "0.1"`. (Go: `internal/model/projection.go`.)
 - `internal/correlate` imports **ONLY** `internal/model` — pure, no IO. If it
   would need a non-model type, that type belongs in `model` (hence observation
   DTOs and `Signature` live there); anything else is a **consumer-defined
-  interface over model types**. Three such seams exist:
+  interface over model types**. Four such seams exist:
   - `IDResolver{Resolve, Mint, Attach, Merge}` — id lifecycle for the core.
   - `AppraisalReader{Appraisals(taskID) -> []Appraisal}` — reads persisted
     appraisals back so a cached classify/relation result is reused, not
     recomputed.
+  - `DesignReader{HasDesign(taskID) -> bool}` — reports whether a task's board
+    carries a non-empty design, the board-visibility signal that drives the
+    `planned` lifecycle and suppresses the new-vs-merged classification flag
+    (see *lifecycle derivation*).
   - `InitiatedTaskReader{InitiatedTasks() -> []InitiatedTask}` — lists
     clutch-initiated tasks so ones with no git/fs/session representation yet
     still project.
-  Entry point: `Correlate(obs Observations, ids IDResolver, appraisals AppraisalReader, initiated InitiatedTaskReader) -> (Result{Tasks, ScanWide}, error)` — `ScanWide` holds the scan-wide unresolved flags that belong to no task (the CLI unions them with per-task flags into `diagnostics.unresolved`).
-  The file backend satisfies all three seams (asserted in `internal/cli/wire.go`).
+  Entry point: `Correlate(obs Observations, ids IDResolver, appraisals AppraisalReader, designs DesignReader, initiated InitiatedTaskReader) -> (Result{Tasks, ScanWide}, error)` — `ScanWide` holds the scan-wide unresolved flags that belong to no task (the CLI unions them with per-task flags into `diagnostics.unresolved`).
+  The file backend satisfies all four seams (asserted in `internal/cli/wire.go`).
 - `internal/discover/*`, `internal/store/*`, `internal/adapter/*` import `model`
   (+ their own port).
 - `internal/cli` (and `cmd/clutch`) is the **composition root** — the only place
