@@ -1,4 +1,4 @@
-# clutch contract (schema_version 0.1)
+# clutch contract (schema_version 0.2)
 
 > Authoritative spec for the Wave-0 scaffold. The Go types under `internal/model`
 > and this document agree field-for-field; if they ever diverge, that is a bug.
@@ -74,7 +74,7 @@ concern.
 | `commits`     | CommitSummary  | `{head, count}` — summary, NOT a full commit list       |
 | `prs`         | []PullRequest  | `{ref, host, number, url, state, draft, checks, review_decision, mergeable}` |
 | `issues`      | []Issue        | `{ref, tracker, key, url, state}` — external (jira/github) |
-| `sessions`    | []Session      | `{ref, host, cwd, branch?, last_activity, running}` — host = claude-code\|codex |
+| `sessions`    | []Session      | `{ref, id, host, cwd, branch?, last_activity, running}` — host = claude-code\|codex; `id` is the host session id (unique per transcript) |
 
 A checkout is discovered by both producers, which assign it **divergent
 identities** — git's remote identity (e.g. `github.com/acme/app`) and fs's
@@ -119,7 +119,7 @@ it is **not** a global identifier. Key scheme:
 | Worktree       | `worktree:<path>`             |
 | PullRequest    | `pr:<host>#<number>`          |
 | Issue          | `issue:<tracker>/<key>`       |
-| Session        | `session:<host>/<cwd>`        |
+| Session        | `session:<host>/<id>`         |
 | Task (itself)  | `task:<id>`                   |
 
 The `task:<id>` key names the **task itself**, not a Class-② representation; it
@@ -163,10 +163,17 @@ Convention/declared imply confidence 1.0; appraisal < 1.0.
   It is a **mutating** action, so it passes the safety gate (`--yes` /
   `CLUTCH_ASSUME_YES`). It mints an id through the **same IDRegistry** as
   scan-discovered tasks but anchors **no signature yet** (it has no
-  representation). Its Class ① identity/policy — `title`, optional `mode`/`base`,
-  and `created` — is **persisted** in the registry and folded into every
-  subsequent `scan` / `tasks` projection as a **registry-only** task (empty
-  Class ②). Each invocation mints a distinct id; the title is a label, not a key.
+  representation). Its Class ① identity/policy — `title`, optional `mode`, and
+  `created` — is **persisted** in the registry and folded into every subsequent
+  `scan` / `tasks` projection as a **registry-only** task (empty Class ②). Each
+  invocation mints a distinct id; the title is a label, not a key.
+
+  The optional `--base` is **persisted alongside** that identity but is **not
+  folded into the projection**: it has no Task-level home (`base` is per-Branch,
+  see *Class ② Representations*, and a registry-only task has no branch). It is
+  kept to **seed the base** of the branch later linked to the task via
+  attach-by-convention below; until that linkage exists it is stored-for-future,
+  not surfaced.
 
   A clutch-initiated task **starts at the `idea` lifecycle**, advancing to
   `planned` once its board carries a non-empty design (see *Lifecycle
@@ -232,6 +239,15 @@ verdict and **wins over both** the deterministic default and the `planned`
 heuristic (it sets `lifecycle` directly) and suppresses the flag. A merged PR is
 likewise definitive and is never treated as the ambiguous case.
 
+The folded verdict **persists on every subsequent scan**: the core folds back
+whichever verdict is cached and does not re-derive the lifecycle from git while
+one is present, nor does it expire the verdict by `input_fingerprint`. Refreshing
+a verdict whose inputs have since changed is `classify`'s job — it re-runs,
+compares its fingerprint, and upserts a fresh verdict that supersedes the stale
+one. Because the fold also suppresses the `classification` flag, the scan will not
+re-flag an already-classified task to prompt that refresh (see *Board →
+`input_fingerprint`*).
+
 Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 `internal/model/board.go`.)
 
@@ -240,7 +256,7 @@ Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 | `principles` | string        | work principles for the task                              |
 | `design`     | string        | evolving design that converges to final; decisions overwrite/accumulate; engineering altitude, NO code |
 | `adrs`       | []ADR         | `{decision, context, alternatives[], consequence}`        |
-| `appraisals` | []Appraisal   | `{kind, subject, result, confidence, input_fingerprint, computed_at}` — cache of classify / inferred-relation results; `kind` is an `AppraisalKind`, `subject` is the RepRef appraised, `input_fingerprint` + `computed_at` let a cached appraisal be invalidated when its inputs change |
+| `appraisals` | []Appraisal   | `{kind, subject, result, confidence, input_fingerprint, computed_at}` — cache of classify / inferred-relation results; `kind` is an `AppraisalKind`, `subject` is the RepRef appraised. `input_fingerprint` + `computed_at` are `classify`'s own cache-coherence token: on a later run it recomputes the fingerprint over the current inputs and, when it differs, re-appraises (upsert) to supersede the stale verdict. The deterministic core does **not** read `input_fingerprint` — it folds whichever verdict is cached — so invalidation is classify-driven, not core-side |
 
 **Appraisal subject by kind.** A `classification` appraisal is a task-level
 judgment, so its `subject` is the **task itself** — `task:<id>`, where `<id>` is
@@ -324,7 +340,7 @@ it. (Go: `internal/model/projection.go`.)
 
 ```json
 {
-  "schema_version": "0.1",
+  "schema_version": "0.2",
   "generated_at": "<RFC3339>",
   "tasks": [ /* Task */ ],
   "diagnostics": {
@@ -379,7 +395,7 @@ and are omitted when absent rather than emitted as `null`.
   beyond their pinned MAJOR.
 - **Pre-1.0 (`0.x`) is unstable**: while MAJOR is `0`, a MINOR bump MAY break.
 
-Current: `schema_version = "0.1"`. (Go: `internal/model/projection.go`.)
+Current: `schema_version = "0.2"`. (Go: `internal/model/projection.go`.)
 
 ---
 

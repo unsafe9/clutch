@@ -25,8 +25,11 @@ do not go reading repo docs to recover the contract.
   Every mutation goes through a CLI command and its safety gate, or it did not
   happen.
 - **You are idempotent given unchanged inputs.** Persist a `fingerprint` over the
-  inputs you judged from. A later scan folds the cached appraisal back in and
-  skips recomputation while that fingerprint holds; re-running classify on
+  inputs you judged from. A later scan folds the cached verdict back into the
+  projection unconditionally — the deterministic core does not re-check your
+  fingerprint. The fingerprint is *your* token: on a re-run you compare it to the
+  current inputs, leave the verdict untouched while it still holds, and re-appraise
+  (the upsert replaces the stale record) once it changes. Re-running classify on
   unchanged inputs reproduces the same record.
 
 ## When you run
@@ -90,13 +93,17 @@ clutch board appraise <task-id> --kind <k> --subject <ref> \
   - **relation / link** → the representation RepRef the edge or link concerns,
     taken from the unresolved `refs`. RepRefs are keyed `repo:<identity>`,
     `branch:<identity>/<name>`, `worktree:<path>`, `pr:<host>#<number>`,
-    `issue:<tracker>/<key>`, or `session:<host>/<cwd>`.
+    `issue:<tracker>/<key>`, or `session:<host>/<id>`.
 - `--result` — per the kind, in the formats above.
 - `--confidence` — a value in `[0,1)`; appraisal is never 1.0 (that is reserved
   for deterministic convention/declared verdicts). Use it to say how strongly the
   evidence supports the call.
-- `--fingerprint` — a hash over the exact inputs you judged from, so the cache is
-  reused while those inputs hold and invalidated when they change.
+- `--fingerprint` — a hash over the exact inputs you judged from. The
+  deterministic core folds your cached verdict back on every scan **without**
+  re-checking this hash; it is the token *you* compare on your next run to notice
+  the inputs changed and re-appraise. A folded verdict also suppresses the task's
+  `classification` flag, so a stale verdict is refreshed only when you re-run and
+  supersede it — the scan will not re-flag the task to prompt you.
 - `--yes` — the safety gate refuses a mutating command without it.
 
 The store upserts by `kind`+`subject`: a fresh verdict for the same pair replaces
