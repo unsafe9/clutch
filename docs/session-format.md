@@ -12,16 +12,18 @@ Each discovered session projects to one `model.Session` (`internal/model/task.go
 
 | model.Session field | type        | source                                                            |
 |---------------------|-------------|-------------------------------------------------------------------|
-| `Ref`               | RepRef      | `session:<host>/<cwd>` — built from `Host` + recovered `Cwd`      |
+| `Ref`               | RepRef      | `session:<host>/<id>` — built from `Host` + the host session `ID` |
+| `ID`                | string      | host session id (see per-host rules); unique per transcript       |
 | `Host`              | string      | `claude-code` or `codex` (constant per discoverer)                |
 | `Cwd`               | string      | recovered original working dir (see per-host rules)               |
 | `Branch`            | string      | git branch recorded in the transcript (`omitempty`)               |
 | `LastActivity`      | time.Time   | timestamp of the last activity record (see per-host rules)        |
 | `Running`           | bool        | deterministic recency rule (see "Running flag" below)             |
 
-The `Ref` scheme `session:<host>/<cwd>` is fixed by the contract
-(`docs/contract.md`, RepRef table). `<cwd>` is the **recovered absolute path**,
-not the sanitized directory name.
+The `Ref` scheme `session:<host>/<id>` is fixed by the contract
+(`docs/contract.md`, RepRef table). `<id>` is the host session id, so concurrent
+sessions sharing one `cwd` keep distinct refs (a cwd-only key collapses them,
+dropping all but one and hiding the running session behind a stale one).
 
 ---
 
@@ -85,6 +87,7 @@ carried `cwd` and 238 did not.
 
 | target          | from                                                                    |
 |-----------------|-------------------------------------------------------------------------|
+| `ID`            | the transcript filename stem (`<session-uuid>` from `<session-uuid>.jsonl`), which equals the `sessionId` echoed inside |
 | `Cwd`           | `.cwd` of any record that has it (stable within a session)              |
 | `Branch`        | `.gitBranch` of any record that has it (may be empty if not in a repo)  |
 | `LastActivity`  | the max `.timestamp` (RFC3339, `Z`) across records — in practice the last record bearing a `timestamp` |
@@ -150,6 +153,7 @@ cross-confirmable, but `session_meta` is the canonical source.
 
 | target          | from                                                                |
 |-----------------|---------------------------------------------------------------------|
+| `ID`            | `session_meta.payload.id` (first line); falls back to the rollout filename stem if absent |
 | `Cwd`           | `session_meta.payload.cwd` (first line) — **directly recoverable, not lossy** |
 | `Branch`        | `session_meta.payload.git.branch` (absent when not in a git repo)   |
 | `LastActivity`  | top-level `.timestamp` of the **last** record in the file           |

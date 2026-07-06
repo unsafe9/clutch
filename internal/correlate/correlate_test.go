@@ -393,9 +393,9 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 		},
 		Sessions: []model.SessionObservation{
 			// Matches the repo path => associated.
-			{Session: model.Session{Host: "claude-code", Cwd: "/repos/app"}},
+			{Session: model.Session{ID: "s-app", Host: "claude-code", Cwd: "/repos/app"}},
 			// Matches nothing => unresolved.
-			{Session: model.Session{Host: "codex", Cwd: "/elsewhere"}},
+			{Session: model.Session{ID: "s-else", Host: "codex", Cwd: "/elsewhere"}},
 		},
 	}
 	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
@@ -410,7 +410,7 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 	if len(tk.Sessions) != 1 {
 		t.Fatalf("want 1 associated session, got %+v", tk.Sessions)
 	}
-	wantRef := model.RepRef("session:claude-code//repos/app")
+	wantRef := model.RepRef("session:claude-code/s-app")
 	if tk.Sessions[0].Ref != wantRef {
 		t.Fatalf("session ref = %q, want %q", tk.Sessions[0].Ref, wantRef)
 	}
@@ -441,6 +441,42 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 	}
 	if !foundUnres {
 		t.Fatalf("missing scan-wide unresolved-session flag: %+v", res.ScanWide)
+	}
+}
+
+// Two sessions sharing a cwd are distinct reps (keyed by session id), so both
+// attach to the task instead of collapsing to one — otherwise a stale session
+// would mask a concurrent running one.
+func TestConcurrentSessionsSameCwdDoNotCollapse(t *testing.T) {
+	ids := newFakeIDs()
+	obs := model.Observations{
+		Git: []model.GitObservation{
+			gitObs("acme/app", "/repos/app", model.Branch{Repo: "acme/app", Name: "main", Head: "aaa"}),
+		},
+		Sessions: []model.SessionObservation{
+			{Session: model.Session{ID: "stale", Host: "claude-code", Cwd: "/repos/app", Running: false}},
+			{Session: model.Session{ID: "live", Host: "claude-code", Cwd: "/repos/app", Running: true}},
+		},
+	}
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(res.Tasks) != 1 {
+		t.Fatalf("want 1 task, got %d", len(res.Tasks))
+	}
+	tk := res.Tasks[0]
+	if len(tk.Sessions) != 2 {
+		t.Fatalf("want both sessions attached, got %d: %+v", len(tk.Sessions), tk.Sessions)
+	}
+	anyRunning := false
+	for _, s := range tk.Sessions {
+		if s.Running {
+			anyRunning = true
+		}
+	}
+	if !anyRunning {
+		t.Fatalf("the running session was masked: %+v", tk.Sessions)
 	}
 }
 

@@ -826,7 +826,7 @@ func issueRef(tracker, key string) model.RepRef {
 }
 
 func sessionRef(s model.Session) model.RepRef {
-	return model.RepRef("session:" + s.Host + "/" + s.Cwd)
+	return model.RepRef("session:" + s.Host + "/" + s.ID)
 }
 
 // taskRef keys the task itself, the subject of a classification appraisal.

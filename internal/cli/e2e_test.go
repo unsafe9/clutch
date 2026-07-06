@@ -101,8 +101,8 @@ func TestGoldenE2E(t *testing.T) {
 		t.Fatalf("unmarshal rendered JSON: %v", err)
 	}
 
-	if env.SchemaVersion != "0.1" {
-		t.Fatalf("schema_version = %q, want %q", env.SchemaVersion, "0.1")
+	if env.SchemaVersion != "0.2" {
+		t.Fatalf("schema_version = %q, want %q", env.SchemaVersion, "0.2")
 	}
 
 	// The deterministic correlation anchors one task per (repo-identity, branch)

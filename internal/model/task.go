@@ -80,7 +80,9 @@ type Task struct {
 //	worktree:<path>            — a Worktree
 //	pr:<host>#<number>         — a PullRequest
 //	issue:<tracker>/<key>      — an Issue
-//	session:<host>/<cwd>       — a Session
+//	session:<host>/<id>        — a Session (id = host session id, unique per
+//	                             transcript, so concurrent sessions in one cwd
+//	                             stay distinct)
 //	task:<id>                  — the task itself, used as a classification
 //	                             appraisal's subject (a task-level judgment
 //	                             concerns no single representation)
@@ -164,8 +166,11 @@ type Issue struct {
 // both hosts yield host, cwd, git branch, and a last-activity timestamp;
 // Running is a deterministic recency derivation (no host lock/pid file exists).
 type Session struct {
-	// Ref is this representation's within-task key (session:<host>/<cwd>).
+	// Ref is this representation's within-task key (session:<host>/<id>).
 	Ref RepRef `json:"ref"`
+	// ID is the host session id (CC transcript uuid / Codex rollout id); it is
+	// unique per session, so concurrent sessions sharing a cwd stay distinct.
+	ID string `json:"id"`
 	// Host is the agent host: claude-code | codex.
 	Host         string    `json:"host"`
 	Cwd          string    `json:"cwd"`

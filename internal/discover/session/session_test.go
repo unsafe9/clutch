@@ -91,7 +91,10 @@ func TestObserveParsesBothHosts(t *testing.T) {
 	}
 
 	alpha := find(t, obs, "claude-code", "/work/alpha")
-	if alpha.Ref != "session:claude-code//work/alpha" {
+	if alpha.ID != "sess-1" {
+		t.Errorf("cc id = %q, want sess-1 (transcript filename stem)", alpha.ID)
+	}
+	if alpha.Ref != "session:claude-code/sess-1" {
 		t.Errorf("cc ref = %q", alpha.Ref)
 	}
 	if !alpha.LastActivity.Equal(now.Add(-1 * time.Minute)) {
@@ -102,7 +105,10 @@ func TestObserveParsesBothHosts(t *testing.T) {
 	}
 
 	beta := find(t, obs, "codex", "/work/beta")
-	if beta.Ref != "session:codex//work/beta" {
+	if beta.ID != "abc" {
+		t.Errorf("codex id = %q, want abc (session_meta.payload.id)", beta.ID)
+	}
+	if beta.Ref != "session:codex/abc" {
 		t.Errorf("codex ref = %q", beta.Ref)
 	}
 	if !beta.LastActivity.Equal(now.Add(-1 * time.Minute)) {
@@ -115,6 +121,48 @@ func TestObserveParsesBothHosts(t *testing.T) {
 	gamma := find(t, obs, "codex", "/work/gamma")
 	if gamma.Running {
 		t.Errorf("archived codex session must never be running")
+	}
+}
+
+// Two CC transcripts in the SAME cwd are two distinct sessions: each keeps its
+// own id (filename stem) and a ref keyed by that id, so a later cwd-keyed dedup
+// cannot collapse them and hide the running one behind a stale one.
+func TestConcurrentSessionsSameCwdDistinctRefs(t *testing.T) {
+	dir := t.TempDir()
+	cc := filepath.Join(dir, "cc")
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	recent := now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	stale := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+
+	// Same cwd, two transcripts: one stale, one running.
+	writeFile(t, filepath.Join(cc, "-work-shared", "old.jsonl"),
+		`{"type":"user","cwd":"/work/shared","timestamp":"`+stale+`"}`+"\n")
+	writeFile(t, filepath.Join(cc, "-work-shared", "live.jsonl"),
+		`{"type":"user","cwd":"/work/shared","timestamp":"`+recent+`"}`+"\n")
+
+	obs, err := observe(cc, filepath.Join(dir, "n1"), filepath.Join(dir, "n2"), []string{"/work"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byRef := map[model.RepRef]model.Session{}
+	for _, o := range obs {
+		if o.Session.Cwd == "/work/shared" {
+			byRef[o.Session.Ref] = o.Session
+		}
+	}
+	if len(byRef) != 2 {
+		t.Fatalf("want 2 distinct sessions for the shared cwd, got %d: %+v", len(byRef), obs)
+	}
+	old, oldOK := byRef["session:claude-code/old"]
+	live, liveOK := byRef["session:claude-code/live"]
+	if !oldOK || !liveOK {
+		t.Fatalf("distinct refs missing, got %+v", byRef)
+	}
+	if old.Running {
+		t.Errorf("stale session must not be running")
+	}
+	if !live.Running {
+		t.Errorf("recent session must be running (must not be masked by the stale one)")
 	}
 }
 

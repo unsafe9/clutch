@@ -187,7 +187,7 @@ func parseClaudeCode(path string, now time.Time) (model.Session, bool) {
 	if cwd == "" {
 		return model.Session{}, false
 	}
-	return buildSession(hostClaudeCode, cwd, last, now, false), true
+	return buildSession(hostClaudeCode, sessionIDFromPath(path), cwd, last, now, false), true
 }
 
 // parseCodex reads a Codex rollout file: session_meta (first line) is the
@@ -206,11 +206,12 @@ func parseCodex(path string, now time.Time, archived bool, scope rootScope) (mod
 		Timestamp string `json:"timestamp"`
 		Type      string `json:"type"`
 		Payload   struct {
+			ID  string `json:"id"`
 			Cwd string `json:"cwd"`
 		} `json:"payload"`
 	}
 
-	var cwd string
+	var cwd, id string
 	var last time.Time
 	first := true
 	sc := bufio.NewScanner(f)
@@ -228,6 +229,7 @@ func parseCodex(path string, now time.Time, archived bool, scope rootScope) (mod
 			first = false
 			if r.Type == "session_meta" {
 				cwd = r.Payload.Cwd
+				id = r.Payload.ID
 			}
 			// cwd is known from the canonical first line; a session with no cwd or
 			// one outside every search root is dropped without reading the rest.
@@ -244,16 +246,27 @@ func parseCodex(path string, now time.Time, archived bool, scope rootScope) (mod
 	if cwd == "" {
 		return model.Session{}, false
 	}
-	return buildSession(hostCodex, cwd, last, now, archived), true
+	if id == "" {
+		id = sessionIDFromPath(path)
+	}
+	return buildSession(hostCodex, id, cwd, last, now, archived), true
 }
 
-func buildSession(host, cwd string, last, now time.Time, forceNotRunning bool) model.Session {
+// sessionIDFromPath derives a stable per-session id from the transcript filename
+// (the CC session uuid, or the Codex rollout stem), used to key the session's
+// RepRef so concurrent sessions sharing a cwd stay distinct.
+func sessionIDFromPath(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+}
+
+func buildSession(host, id, cwd string, last, now time.Time, forceNotRunning bool) model.Session {
 	running := false
 	if !forceNotRunning && !last.IsZero() {
 		running = now.Sub(last) <= RunningThreshold
 	}
 	return model.Session{
-		Ref:          model.RepRef("session:" + host + "/" + cwd),
+		Ref:          model.RepRef("session:" + host + "/" + id),
+		ID:           id,
 		Host:         host,
 		Cwd:          cwd,
 		Branch:       gitBranch(cwd),

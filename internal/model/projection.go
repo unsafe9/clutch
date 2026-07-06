@@ -12,7 +12,7 @@ import "time"
 //   - Consumers MUST ignore unknown fields and MUST NOT assume any field beyond
 //     their pinned MAJOR.
 //   - Pre-1.0 (0.x) is unstable: while MAJOR is 0, a MINOR bump MAY break.
-const SchemaVersion = "0.1"
+const SchemaVersion = "0.2"
 
 // ProjectionEnvelope is the stable, schema-versioned machine contract emitted
 // by clutch's --json output. It is the sole public data shape; further surfaces
