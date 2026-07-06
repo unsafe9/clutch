@@ -52,12 +52,29 @@ func fillIdentity(tasks []model.Task, reg identityStamper) error {
 // stored `updated` advances exactly when a scan sees the task's representations
 // or relations change. Identity & policy fields (id/created/updated/mode/board)
 // are stamping OUTPUTS, not inputs, so they are excluded to avoid churn.
+//
+// A session's `LastActivity` and `Running` are wall-clock derivations (running =
+// now-last <= 5m; last advances as a live session writes), so they change across
+// scans of otherwise-identical on-disk state. Including them would churn `updated`
+// on every scan and re-write the registry, breaking the contract's determinism
+// guarantee. They are zeroed here (on a copy, so the real task is untouched) while
+// a session's stable identity — id/host/cwd/branch — stays in the digest, so a
+// genuinely new or departed session still advances `updated`.
 func fingerprint(t model.Task) string {
 	t.ID = ""
 	t.Created = time.Time{}
 	t.Updated = time.Time{}
 	t.Mode = ""
 	t.Board = nil
+	if len(t.Sessions) > 0 {
+		sessions := make([]model.Session, len(t.Sessions))
+		copy(sessions, t.Sessions)
+		for i := range sessions {
+			sessions[i].LastActivity = time.Time{}
+			sessions[i].Running = false
+		}
+		t.Sessions = sessions
+	}
 	data, _ := json.Marshal(t)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
