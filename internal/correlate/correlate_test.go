@@ -2,6 +2,7 @@ package correlate
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/unsafe9/clutch/internal/model"
@@ -183,6 +184,105 @@ func TestFSEnrichesGitRepoNoNewTask(t *testing.T) {
 	}
 	if got[0].Repos[0].Remote != "ssh://x" {
 		t.Fatalf("repo remote not enriched: %q", got[0].Repos[0].Remote)
+	}
+}
+
+// countRepoLinks returns the number of convention links whose subject is a repo
+// rep, and asserts none is spurious (i.e. every repo link names wantRef).
+func countRepoLinks(t *testing.T, tk model.Task, wantRef model.RepRef) int {
+	t.Helper()
+	n := 0
+	for _, l := range tk.Links {
+		if strings.HasPrefix(string(l.Subject), "repo:") {
+			n++
+			if l.Subject != wantRef {
+				t.Errorf("spurious repo link %q, want only %q", l.Subject, wantRef)
+			}
+		}
+	}
+	return n
+}
+
+// A remote-backed checkout is observed twice — git under its remote identity and
+// fs under the path-based local/<base> identity — but shares one path. The two
+// reps must collapse into ONE, keeping the durable remote identity, with no
+// spurious second rep or link.
+func TestRepoWithRemoteCollapsesToOneRep(t *testing.T) {
+	ids := newFakeIDs()
+	obs := model.Observations{
+		Git: []model.GitObservation{
+			{
+				Repo: model.RepoRef{
+					Identity: "github.com/acme/app",
+					Path:     "/repos/app",
+					Remote:   "git@github.com:acme/app.git",
+				},
+				Branches: []model.Branch{{Repo: "github.com/acme/app", Name: "main", Head: "aaa"}},
+			},
+		},
+		// fs re-observes the SAME checkout under the path-based identity.
+		FS: []model.FSObservation{
+			{Repo: model.RepoRef{Identity: "local/app", Path: "/repos/app"}},
+		},
+	}
+	res, err := Correlate(obs, ids, fakeAppraisals{})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(res.Tasks) != 1 {
+		t.Fatalf("want 1 task, got %d: %+v", len(res.Tasks), res.Tasks)
+	}
+	tk := res.Tasks[0]
+	if len(tk.Repos) != 1 {
+		t.Fatalf("want 1 repo rep after collapse, got %d: %+v", len(tk.Repos), tk.Repos)
+	}
+	rep := tk.Repos[0]
+	if rep.Identity != "github.com/acme/app" {
+		t.Errorf("collapsed rep identity = %q, want remote identity github.com/acme/app", rep.Identity)
+	}
+	if rep.Remote == "" {
+		t.Errorf("collapsed rep lost its remote")
+	}
+	if rep.Ref != "repo:github.com/acme/app" {
+		t.Errorf("collapsed rep ref = %q", rep.Ref)
+	}
+	if n := countRepoLinks(t, tk, "repo:github.com/acme/app"); n != 1 {
+		t.Errorf("want exactly 1 repo link, got %d: %+v", n, tk.Links)
+	}
+}
+
+// A checkout with no remote yields the SAME local/<base> identity from both
+// producers, so it must surface exactly one rep (and one link) — the collapse
+// must not depend on a remote being present.
+func TestRepoWithoutRemoteSurfacesOnce(t *testing.T) {
+	ids := newFakeIDs()
+	obs := model.Observations{
+		Git: []model.GitObservation{
+			{
+				Repo:     model.RepoRef{Identity: "local/app", Path: "/repos/app"},
+				Branches: []model.Branch{{Repo: "local/app", Name: "main", Head: "aaa"}},
+			},
+		},
+		FS: []model.FSObservation{
+			{Repo: model.RepoRef{Identity: "local/app", Path: "/repos/app"}},
+		},
+	}
+	res, err := Correlate(obs, ids, fakeAppraisals{})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(res.Tasks) != 1 {
+		t.Fatalf("want 1 task, got %d: %+v", len(res.Tasks), res.Tasks)
+	}
+	tk := res.Tasks[0]
+	if len(tk.Repos) != 1 {
+		t.Fatalf("no-remote repo should surface exactly one rep, got %d: %+v", len(tk.Repos), tk.Repos)
+	}
+	if tk.Repos[0].Identity != "local/app" {
+		t.Errorf("rep identity = %q, want local/app", tk.Repos[0].Identity)
+	}
+	if n := countRepoLinks(t, tk, "repo:local/app"); n != 1 {
+		t.Errorf("want exactly 1 repo link, got %d: %+v", n, tk.Links)
 	}
 }
 

@@ -58,6 +58,13 @@ concern.
 | `issues`      | []Issue        | `{ref, tracker, key, url, state}` — external (jira/github) |
 | `sessions`    | []Session      | `{ref, host, cwd, branch?, last_activity, running}` — host = claude-code\|codex |
 
+A checkout is discovered by both producers, which assign it **divergent
+identities** — git's remote identity (e.g. `github.com/acme/app`) and fs's
+path-based `local/<base>` — that only its shared path unifies. The two collapse
+into a **single** `repos` entry keyed by path, keeping the durable remote identity
+when present; a remote-backed repo therefore yields one rep, not two. Per-repo,
+the projected rep count and the path-deduped `scan_stats.repos_scanned` agree.
+
 `base` (fork-point ref) and `integration` (enum: unmerged / merged / conflicts /
 behind) are **per-Branch**, not Task-level: one task spans multiple branches/repos
 with divergent fork-points and merge states, so a single Task-level scalar cannot

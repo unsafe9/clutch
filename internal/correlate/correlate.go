@@ -195,19 +195,53 @@ func (b *builder) ingestSessions(sobs []model.SessionObservation) {
 func (b *builder) addRepo(t *model.Task, r model.RepoRef) {
 	r.Ref = repoRef(r.Identity)
 	for i := range t.Repos {
-		if t.Repos[i].Ref == r.Ref {
-			// Enrich/confirm an already-discovered repo without duplicating.
-			if r.Path != "" {
-				t.Repos[i].Path = r.Path
-			}
-			if r.Remote != "" {
-				t.Repos[i].Remote = r.Remote
-			}
+		existing := &t.Repos[i]
+		// The same checkout is discovered by both producers under DIVERGENT
+		// identities — git's remote identity (e.g. github.com/acme/app) and fs's
+		// path-based local/<base> — that only the shared path unifies. Collapse by
+		// identity OR by path so a remote-backed repo yields ONE rep, not two.
+		if existing.Ref == r.Ref || (r.Path != "" && existing.Path == r.Path) {
+			b.mergeRepo(t, existing, r)
 			return
 		}
 	}
 	t.Repos = append(t.Repos, r)
 	b.addLink(t, r.Ref)
+}
+
+// mergeRepo folds another observation of an already-recorded repo (matched by
+// identity or by shared checkout path) into the surviving rep. The remote
+// identity is the durable one and wins over the fs local/<base> identity: when
+// the two disagree, the rep carrying a remote is kept and the other's convention
+// link is re-keyed to it, so no spurious second rep or link survives.
+func (b *builder) mergeRepo(t *model.Task, existing *model.RepoRef, r model.RepoRef) {
+	if r.Remote != "" && existing.Remote == "" && existing.Ref != r.Ref {
+		// Incoming carries the durable remote identity; it supersedes the
+		// path-based rep. Preserve the known path, re-key the existing link.
+		b.rekeyLink(t, existing.Ref, r.Ref)
+		if r.Path == "" {
+			r.Path = existing.Path
+		}
+		*existing = r
+		return
+	}
+	// Existing identity survives; enrich any fields it is missing.
+	if r.Path != "" {
+		existing.Path = r.Path
+	}
+	if r.Remote != "" {
+		existing.Remote = r.Remote
+	}
+}
+
+// rekeyLink repoints every convention link whose subject is oldRef to newRef,
+// used when a repo rep's identity is superseded so its link is not left dangling.
+func (b *builder) rekeyLink(t *model.Task, oldRef, newRef model.RepRef) {
+	for i := range t.Links {
+		if t.Links[i].Subject == oldRef {
+			t.Links[i].Subject = newRef
+		}
+	}
 }
 
 func (b *builder) addBranch(t *model.Task, br model.Branch) {
