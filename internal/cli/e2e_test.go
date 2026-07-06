@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/unsafe9/clutch/internal/correlate"
 	"github.com/unsafe9/clutch/internal/discover/fs"
@@ -61,7 +62,18 @@ func TestGoldenE2E(t *testing.T) {
 		if err != nil {
 			t.Fatalf("correlate.Correlate: %v", err)
 		}
-		env := model.ProjectionEnvelope{SchemaVersion: model.SchemaVersion, Tasks: tasks}
+		// GeneratedAt and scan duration are the only non-deterministic envelope
+		// inputs (a wall clock); freeze both so the two renders stay
+		// byte-identical, mirroring how project() reads the clock in one place.
+		env := model.ProjectionEnvelope{
+			SchemaVersion: model.SchemaVersion,
+			GeneratedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Tasks:         tasks,
+			Diagnostics: model.Diagnostics{
+				Unresolved: promoteUnresolved(tasks),
+				ScanStats:  scanStats(obs, tasks, 0),
+			},
+		}
 
 		var buf bytes.Buffer
 		if err := emitJSON(&buf, env); err != nil {
@@ -90,6 +102,40 @@ func TestGoldenE2E(t *testing.T) {
 	// re-enumerated alpha's two branches, inflating this to five.
 	if got := len(env.Tasks); got != 3 {
 		t.Fatalf("tasks = %d, want 3\n%s", got, first)
+	}
+
+	// Envelope diagnostics: generated_at round-trips the frozen clock, and
+	// scan_stats reflects the fixtures — alpha + beta are two repos; git's
+	// worktree list surfaces three working trees (alpha's primary, alpha's linked
+	// alpha-wt, beta's primary); no sessions were fed; three tasks were projected.
+	// With no sessions there is nothing the core cannot resolve, so unresolved is
+	// empty.
+	if !env.GeneratedAt.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("generated_at = %v, want frozen 2026-01-01", env.GeneratedAt)
+	}
+	stats := env.Diagnostics.ScanStats
+	if stats.ReposScanned != 2 {
+		t.Errorf("scan_stats.repos_scanned = %d, want 2", stats.ReposScanned)
+	}
+	if stats.Worktrees != 3 {
+		t.Errorf("scan_stats.worktrees = %d, want 3", stats.Worktrees)
+	}
+	if stats.Sessions != 0 {
+		t.Errorf("scan_stats.sessions = %d, want 0", stats.Sessions)
+	}
+	if stats.TasksProjected != len(env.Tasks) {
+		t.Errorf("scan_stats.tasks_projected = %d, want %d", stats.TasksProjected, len(env.Tasks))
+	}
+	if stats.DurationMS != 0 {
+		t.Errorf("scan_stats.duration_ms = %d, want frozen 0", stats.DurationMS)
+	}
+	if len(env.Diagnostics.Unresolved) != 0 {
+		t.Errorf("diagnostics.unresolved = %v, want empty", env.Diagnostics.Unresolved)
+	}
+	// The contract renders empty collections as [], never null — a null in the
+	// emitted JSON would unmarshal back to a nil slice.
+	if env.Diagnostics.Unresolved == nil {
+		t.Errorf("diagnostics.unresolved rendered as null, want []")
 	}
 
 	// Every task carries a minted id, git-detected provenance, an active

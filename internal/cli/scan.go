@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"time"
+
 	"github.com/spf13/cobra"
 
 	"github.com/unsafe9/clutch/internal/config"
@@ -30,9 +32,11 @@ func runScan(cmd *cobra.Command, _ []string) error {
 }
 
 // project is the deterministic core pipeline and the composition root's wiring:
-// load config → discover (git/fs/session) → correlate → envelope. Each callee
-// is a later-wave stub today.
+// load config → discover (git/fs/session) → correlate → envelope. The clock is
+// the only non-deterministic input, read here (generated_at, scan duration) so
+// the core stays reproducible.
 func project() (model.ProjectionEnvelope, error) {
+	start := time.Now()
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return model.ProjectionEnvelope{}, err
@@ -55,8 +59,63 @@ func project() (model.ProjectionEnvelope, error) {
 	if err != nil {
 		return model.ProjectionEnvelope{}, err
 	}
+	generatedAt := time.Now()
+	// The contract's machine shape renders empty collections as [], never null.
+	if tasks == nil {
+		tasks = []model.Task{}
+	}
 	return model.ProjectionEnvelope{
 		SchemaVersion: model.SchemaVersion,
+		GeneratedAt:   generatedAt,
 		Tasks:         tasks,
+		Diagnostics: model.Diagnostics{
+			Unresolved: promoteUnresolved(tasks),
+			ScanStats:  scanStats(obs, tasks, generatedAt.Sub(start)),
+		},
 	}, nil
+}
+
+// promoteUnresolved flattens every task's Unresolved flags to the envelope level
+// so the classify orchestrator reads the whole ambiguous remainder from the
+// diagnostics without walking each task. Flags keep their order (projection task
+// order, then per-task order) and their TaskID — empty stays empty, marking a
+// scan-wide flag per correlate's convention. The result is never nil so an empty
+// remainder marshals as [] per the contract's machine shape.
+func promoteUnresolved(tasks []model.Task) []model.Unresolved {
+	out := []model.Unresolved{}
+	for _, t := range tasks {
+		out = append(out, t.Unresolved...)
+	}
+	return out
+}
+
+// scanStats summarizes the scan run. Repos and worktrees are distinct paths
+// across BOTH the git and fs producers, which overlap (each surfaces the same
+// checkouts); they are deduped by path, not identity, because git and fs assign a
+// repo divergent identities (remote-based vs path-based) that only its path
+// unifies. Worktrees counts every working tree git enumerates, the primary
+// checkout included. Sessions counts every discovered session, including
+// cwd-unmatched ones that bind to no task.
+func scanStats(obs model.Observations, tasks []model.Task, d time.Duration) model.ScanStats {
+	repos := map[string]bool{}
+	worktrees := map[string]bool{}
+	for _, g := range obs.Git {
+		repos[g.Repo.Path] = true
+		for _, w := range g.Worktrees {
+			worktrees[w.Path] = true
+		}
+	}
+	for _, f := range obs.FS {
+		repos[f.Repo.Path] = true
+		for _, w := range f.Worktrees {
+			worktrees[w.Path] = true
+		}
+	}
+	return model.ScanStats{
+		ReposScanned:   len(repos),
+		Worktrees:      len(worktrees),
+		Sessions:       len(obs.Sessions),
+		TasksProjected: len(tasks),
+		DurationMS:     d.Milliseconds(),
+	}
 }
