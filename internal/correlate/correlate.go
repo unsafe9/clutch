@@ -38,6 +38,16 @@ type AppraisalReader interface {
 	Appraisals(taskID string) ([]model.Appraisal, error)
 }
 
+// InitiatedTaskReader lists clutch-initiated tasks — ones created directly
+// through the CLI (`clutch task new`) that may have no git/fs/session
+// representation yet. Correlation materializes any that no observation produced
+// so a freshly-created task still projects. It is a consumer-defined interface
+// over model types; the file backend satisfies it.
+type InitiatedTaskReader interface {
+	// InitiatedTasks returns the persisted clutch-initiated tasks.
+	InitiatedTasks() ([]model.InitiatedTask, error)
+}
+
 // Result is the correlation output: the projected tasks plus the scan-wide
 // unresolved flags that belong to no single task (e.g. an in-scope session whose
 // cwd matched no repo/worktree). Per-task flags live on each Task.Unresolved;
@@ -49,9 +59,9 @@ type Result struct {
 }
 
 // Correlate is the deterministic projection step: raw observations, the id
-// resolver, and the appraisal cache in, correlated Tasks out. Pure — no IO, no
-// git/fs/LLM.
-func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReader) (Result, error) {
+// resolver, the appraisal cache, and the clutch-initiated task set in,
+// correlated Tasks out. Pure — no IO, no git/fs/LLM.
+func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReader, initiated InitiatedTaskReader) (Result, error) {
 	b := newBuilder()
 
 	if err := b.ingestGit(obs.Git, ids); err != nil {
@@ -62,7 +72,7 @@ func Correlate(obs model.Observations, ids IDResolver, appraisals AppraisalReade
 	}
 	b.ingestSessions(obs.Sessions)
 
-	tasks, err := b.finalize(appraisals)
+	tasks, err := b.finalize(appraisals, initiated)
 	if err != nil {
 		return Result{}, err
 	}
@@ -461,7 +471,7 @@ func (b *builder) indexBranchName(repoIdentity, name, id string) {
 
 // ── finalize: lineage, appraisal fold, deterministic ordering ─────────────────
 
-func (b *builder) finalize(appraisals AppraisalReader) ([]model.Task, error) {
+func (b *builder) finalize(appraisals AppraisalReader, initiated InitiatedTaskReader) ([]model.Task, error) {
 	// Lineage: a branch's Base mapping to another task's branch head makes that
 	// other task a parent.
 	for _, id := range b.order {
@@ -494,6 +504,31 @@ func (b *builder) finalize(appraisals AppraisalReader) ([]model.Task, error) {
 
 		sortReps(t)
 		out = append(out, *t)
+	}
+
+	// Materialize clutch-initiated tasks that no observation produced, so a
+	// freshly-created `clutch task new` task still projects. Such a task is
+	// registry-only: its Class ② representations stay empty until a branch is
+	// later linked to the id, and it starts at the idea lifecycle.
+	if initiated != nil {
+		its, err := initiated.InitiatedTasks()
+		if err != nil {
+			return nil, err
+		}
+		for _, it := range its {
+			if _, built := b.byID[it.ID]; built {
+				continue // an observation already produced a task for this id
+			}
+			out = append(out, model.Task{
+				ID:         it.ID,
+				Title:      it.Title,
+				Lifecycle:  model.LifecycleIdea,
+				Mode:       it.Mode,
+				Provenance: model.ProvenanceClutchInitiated,
+				Created:    it.Created,
+				Updated:    it.Created,
+			})
+		}
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

@@ -192,6 +192,61 @@ func TestRegistryRetireKeepsBoard(t *testing.T) {
 	}
 }
 
+func TestCreateInitiatedTaskPersistsAndLists(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	created := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+
+	id, err := s.CreateInitiatedTask("spike the parser", model.ModeSteer, "main", created)
+	if err != nil {
+		t.Fatalf("CreateInitiatedTask: %v", err)
+	}
+	// A second create with the same title mints a distinct id.
+	other, err := s.CreateInitiatedTask("spike the parser", "", "", created)
+	if err != nil {
+		t.Fatalf("CreateInitiatedTask (2nd): %v", err)
+	}
+	if id == other {
+		t.Fatalf("two creates reused id %q, want distinct", id)
+	}
+
+	// Reopen with a fresh Store to prove the metadata persisted across restarts.
+	s2 := New(root)
+	its, err := s2.InitiatedTasks()
+	if err != nil {
+		t.Fatalf("InitiatedTasks: %v", err)
+	}
+	if len(its) != 2 {
+		t.Fatalf("InitiatedTasks = %d, want 2: %+v", len(its), its)
+	}
+	var got model.InitiatedTask
+	found := false
+	for _, it := range its {
+		if it.ID == id {
+			got = it
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("id %q missing from InitiatedTasks: %+v", id, its)
+	}
+	if got.Title != "spike the parser" || got.Mode != model.ModeSteer || !got.Created.Equal(created) {
+		t.Fatalf("initiated task = %+v, want title/steer/created", got)
+	}
+
+	// A retired initiated id is omitted from the live list.
+	if err := s2.Retire(id); err != nil {
+		t.Fatal(err)
+	}
+	its, err = s2.InitiatedTasks()
+	if err != nil {
+		t.Fatalf("InitiatedTasks after retire: %v", err)
+	}
+	if len(its) != 1 || its[0].ID != other {
+		t.Fatalf("after retire InitiatedTasks = %+v, want only %q", its, other)
+	}
+}
+
 func TestAddAppraisalUpsertOrderingAndPersist(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)

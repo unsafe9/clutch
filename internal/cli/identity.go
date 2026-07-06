@@ -23,6 +23,17 @@ type identityStamper interface {
 // policy mode.
 func fillIdentity(tasks []model.Task, reg identityStamper) error {
 	for i := range tasks {
+		// A clutch-initiated task carries its persisted created/updated and
+		// stored mode from the registry via correlation's materialization, so
+		// the fingerprint stamper (which governs git-detected tasks, whose
+		// Class ① is re-derived from observations each scan) must not overwrite
+		// them. The effective-mode default still applies uniformly.
+		if tasks[i].Provenance == model.ProvenanceClutchInitiated {
+			if tasks[i].Mode == "" {
+				tasks[i].Mode = model.ModeSteer
+			}
+			continue
+		}
 		created, updated, mode, err := reg.Identity(tasks[i].ID, fingerprint(tasks[i]))
 		if err != nil {
 			return err

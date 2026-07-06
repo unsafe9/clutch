@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/unsafe9/clutch/internal/model"
 )
@@ -59,6 +60,15 @@ func (f fakeAppraisals) Appraisals(taskID string) ([]model.Appraisal, error) {
 	return f.byID[taskID], nil
 }
 
+// fakeInitiated is a canned InitiatedTaskReader.
+type fakeInitiated struct {
+	tasks []model.InitiatedTask
+}
+
+func (f fakeInitiated) InitiatedTasks() ([]model.InitiatedTask, error) {
+	return f.tasks, nil
+}
+
 func gitObs(identity, path string, branches ...model.Branch) model.GitObservation {
 	return model.GitObservation{
 		Repo:     model.RepoRef{Identity: identity, Path: path, Remote: "git@github.com:" + identity + ".git"},
@@ -67,7 +77,7 @@ func gitObs(identity, path string, branches ...model.Branch) model.GitObservatio
 }
 
 func TestEmptyObservations(t *testing.T) {
-	res, err := Correlate(model.Observations{}, newFakeIDs(), fakeAppraisals{})
+	res, err := Correlate(model.Observations{}, newFakeIDs(), fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -76,6 +86,84 @@ func TestEmptyObservations(t *testing.T) {
 	}
 	if len(res.Tasks) != 0 {
 		t.Fatalf("want 0 tasks, got %d", len(res.Tasks))
+	}
+}
+
+func TestMaterializeInitiatedTask(t *testing.T) {
+	created := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	initiated := fakeInitiated{tasks: []model.InitiatedTask{
+		{ID: "INIT1", Title: "spike the parser", Mode: model.ModeSteer, Created: created},
+	}}
+	// One git-detected task coexists so the merge/ordering with discovered
+	// tasks is exercised.
+	obs := model.Observations{
+		Git: []model.GitObservation{
+			gitObs("acme/app", "/repos/app", model.Branch{Repo: "acme/app", Name: "main", Head: "aaa"}),
+		},
+	}
+	res, err := Correlate(obs, newFakeIDs(), fakeAppraisals{}, initiated)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	got := res.Tasks
+	if len(got) != 2 {
+		t.Fatalf("want 2 tasks (git + initiated), got %d: %+v", len(got), got)
+	}
+	var init model.Task
+	found := false
+	for _, tk := range got {
+		if tk.ID == "INIT1" {
+			init = tk
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("registry-only initiated task not projected: %+v", got)
+	}
+	if init.Provenance != model.ProvenanceClutchInitiated {
+		t.Errorf("provenance = %q, want clutch-initiated", init.Provenance)
+	}
+	if init.Lifecycle != model.LifecycleIdea {
+		t.Errorf("lifecycle = %q, want idea", init.Lifecycle)
+	}
+	if init.Title != "spike the parser" || init.Mode != model.ModeSteer {
+		t.Errorf("title/mode = %q/%q, want %q/steer", init.Title, init.Mode, "spike the parser")
+	}
+	if !init.Created.Equal(created) || !init.Updated.Equal(created) {
+		t.Errorf("created/updated = %v/%v, want %v", init.Created, init.Updated, created)
+	}
+	if len(init.Branches) != 0 || len(init.Repos) != 0 {
+		t.Errorf("registry-only task should carry no representations: %+v", init)
+	}
+}
+
+func TestInitiatedTaskYieldsToObservation(t *testing.T) {
+	// When an observation already produced a task for an initiated id, the
+	// observation wins (no duplicate registry-only shell).
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "main"}, "SHARED")
+	initiated := fakeInitiated{tasks: []model.InitiatedTask{
+		{ID: "SHARED", Title: "planner label", Mode: model.ModeCruise},
+	}}
+	obs := model.Observations{
+		Git: []model.GitObservation{
+			gitObs("acme/app", "/repos/app", model.Branch{Repo: "acme/app", Name: "main", Head: "aaa"}),
+		},
+	}
+	res, err := Correlate(obs, ids, fakeAppraisals{}, initiated)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	got := res.Tasks
+	if len(got) != 1 {
+		t.Fatalf("want 1 task (dedup by id), got %d: %+v", len(got), got)
+	}
+	// The observation-built task keeps git-detected provenance and its branch.
+	if got[0].Provenance != model.ProvenanceGitDetected {
+		t.Errorf("provenance = %q, want git-detected (observation wins)", got[0].Provenance)
+	}
+	if len(got[0].Branches) != 1 {
+		t.Errorf("observation task lost its branch: %+v", got[0])
 	}
 }
 
@@ -93,7 +181,7 @@ func TestGroupByBranchSignature_MintAndReuse(t *testing.T) {
 		},
 	}
 
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -141,7 +229,7 @@ func TestRepoAnchorAndFSOnly(t *testing.T) {
 				Worktrees: []model.Worktree{{Path: "/repos/tool", Branch: "main", Repo: "acme/tool"}}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -172,7 +260,7 @@ func TestFSEnrichesGitRepoNoNewTask(t *testing.T) {
 				Worktrees: []model.Worktree{{Path: "/repos/app/wt", Branch: "main", Repo: "acme/app"}}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -226,7 +314,7 @@ func TestRepoWithRemoteCollapsesToOneRep(t *testing.T) {
 			{Repo: model.RepoRef{Identity: "local/app", Path: "/repos/app"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -268,7 +356,7 @@ func TestRepoWithoutRemoteSurfacesOnce(t *testing.T) {
 			{Repo: model.RepoRef{Identity: "local/app", Path: "/repos/app"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -300,7 +388,7 @@ func TestSessionAssociationAndUnresolved(t *testing.T) {
 			{Session: model.Session{Host: "codex", Cwd: "/elsewhere"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -383,7 +471,7 @@ func TestSessionBindsByBranch(t *testing.T) {
 			{Session: model.Session{Host: "codex", Cwd: "/repos/app", Branch: "gone"}},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -422,7 +510,7 @@ func TestWorktreeAttachesOnlyToItsBranchTask(t *testing.T) {
 			},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -452,7 +540,7 @@ func TestAppraisalFold(t *testing.T) {
 			{Kind: model.AppraisalKind("future"), Result: "ignore-me", Confidence: 0.5},
 		},
 	}}
-	res, err := Correlate(obs, ids, appr)
+	res, err := Correlate(obs, ids, appr, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -486,7 +574,7 @@ func TestLineageFromBranchBase(t *testing.T) {
 			),
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -512,7 +600,7 @@ func TestLifecycleFromPRState(t *testing.T) {
 			},
 		},
 	}
-	res, err := Correlate(obs, ids, fakeAppraisals{})
+	res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -533,7 +621,7 @@ func TestLifecycleFromPRDetailedStatus(t *testing.T) {
 				},
 			},
 		}
-		res, err := Correlate(obs, ids, fakeAppraisals{})
+		res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -575,7 +663,7 @@ func TestDeterministicOrderingAcrossRuns(t *testing.T) {
 				{Session: model.Session{Host: "claude-code", Cwd: "/nope2"}},
 			},
 		}
-		res, err := Correlate(obs, ids, fakeAppraisals{})
+		res, err := Correlate(obs, ids, fakeAppraisals{}, nil)
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}

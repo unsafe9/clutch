@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // Signature is a single durable representation signature used to anchor a stable
 // task id. The same signature resolves to the same id across scans (e.g. repo
 // identity + branch, or an issue link). It lives in model so the pure correlate
@@ -50,4 +52,20 @@ type Observations struct {
 	Git      []GitObservation     `json:"git"`
 	FS       []FSObservation      `json:"fs"`
 	Sessions []SessionObservation `json:"sessions"`
+}
+
+// InitiatedTask is the persisted Class ① identity/policy of a clutch-initiated
+// task — one created directly through the CLI (`clutch task new`) before any
+// git/fs/session representation exists. Correlation materializes it into the
+// projection so a freshly-created task still appears. It lives in model so the
+// pure correlate package can consume it without importing the store.
+type InitiatedTask struct {
+	// ID is the registry-minted task id.
+	ID string `json:"id"`
+	// Title is the planner-set label.
+	Title string `json:"title"`
+	// Mode is the explicit execution mode, or empty for the project default.
+	Mode Mode `json:"mode,omitempty"`
+	// Created is when the task identity was minted.
+	Created time.Time `json:"created"`
 }

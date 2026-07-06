@@ -55,7 +55,7 @@ func project() (model.ProjectionEnvelope, error) {
 		return model.ProjectionEnvelope{}, err
 	}
 	obs := model.Observations{Git: gitObs, FS: fsObs, Sessions: sessObs}
-	res, err := correlate.Correlate(obs, backend, backend)
+	res, err := correlate.Correlate(obs, backend, backend, backend)
 	if err != nil {
 		return model.ProjectionEnvelope{}, err
 	}

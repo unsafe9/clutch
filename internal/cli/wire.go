@@ -13,9 +13,10 @@ import (
 // reader — so the CLI can wire it straight into the pure correlation core. These
 // assertions fail at compile time if any port drifts.
 var (
-	_ store.BoardStore          = (*file.Store)(nil)
-	_ store.IDRegistry          = (*file.Store)(nil)
-	_ correlate.IDResolver      = (*file.Store)(nil)
-	_ correlate.AppraisalReader = (*file.Store)(nil)
-	_ adapter.IssueTracker      = (*github.Tracker)(nil)
+	_ store.BoardStore              = (*file.Store)(nil)
+	_ store.IDRegistry              = (*file.Store)(nil)
+	_ correlate.IDResolver          = (*file.Store)(nil)
+	_ correlate.AppraisalReader     = (*file.Store)(nil)
+	_ correlate.InitiatedTaskReader = (*file.Store)(nil)
+	_ adapter.IssueTracker          = (*github.Tracker)(nil)
 )

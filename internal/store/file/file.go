@@ -59,6 +59,20 @@ type idMeta struct {
 	Updated     time.Time  `json:"updated"`
 	Fingerprint string     `json:"fingerprint,omitempty"`
 	Mode        model.Mode `json:"mode,omitempty"`
+	// Initiated holds the persisted Class ① identity/policy for a
+	// clutch-initiated task (created via `clutch task new`) before it has any
+	// git representation. It is nil for git-detected ids, whose Class ① is
+	// derived from observations each scan; its presence marks clutch-initiated
+	// provenance.
+	Initiated *initiatedMeta `json:"initiated,omitempty"`
+}
+
+// initiatedMeta is the persisted identity/policy of a clutch-initiated task.
+type initiatedMeta struct {
+	Title   string    `json:"title"`
+	Mode    string    `json:"mode,omitempty"`
+	Base    string    `json:"base,omitempty"`
+	Created time.Time `json:"created"`
 }
 
 // Compile-time proof that *Store implements both ports.
@@ -391,6 +405,52 @@ func (s *Store) Identity(id, fingerprint string) (created, updated time.Time, mo
 		}
 	}
 	return m.Created, m.Updated, m.Mode, nil
+}
+
+// CreateInitiatedTask mints a fresh id for a clutch-initiated task and persists
+// its Class ① identity/policy in the registry. The task anchors NO signature
+// yet (it has no git representation); a later scan that finds a correlating
+// branch attaches that signature to this id. Returns the new id.
+func (s *Store) CreateInitiatedTask(title string, mode model.Mode, base string, created time.Time) (id string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, err = s.newID()
+	if err != nil {
+		return "", err
+	}
+	s.registry.Ids[id] = &idMeta{
+		Initiated: &initiatedMeta{
+			Title:   title,
+			Mode:    string(mode),
+			Base:    base,
+			Created: created,
+		},
+	}
+	if err := s.persistRegistry(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// InitiatedTasks implements correlate.InitiatedTaskReader: the persisted
+// clutch-initiated tasks that are still live (retired or merged-away ids are
+// omitted, matching the vanished-representation and merge semantics).
+func (s *Store) InitiatedTasks() ([]model.InitiatedTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []model.InitiatedTask{}
+	for id, m := range s.registry.Ids {
+		if m == nil || m.Initiated == nil || m.Retired || m.MergedInto != "" {
+			continue
+		}
+		out = append(out, model.InitiatedTask{
+			ID:      id,
+			Title:   m.Initiated.Title,
+			Mode:    model.Mode(m.Initiated.Mode),
+			Created: m.Initiated.Created,
+		})
+	}
+	return out, nil
 }
 
 // Appraisals implements correlate.AppraisalReader: the cached board.Appraisals
