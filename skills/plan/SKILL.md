@@ -86,7 +86,9 @@ defense.
 
 1. **Goal and non-goals** — what this task achieves, and what it deliberately
    does not.
-2. **Boundaries** — what the change touches and what it explicitly does not.
+2. **Boundaries** — which components/modules/subsystems the change touches and
+   which it explicitly does not, named at component altitude (never file paths or
+   diffs — those are the executor's, and the *Refusals* below ban them).
 3. **Engineering approach** — architecture, decomposition, and the key decisions.
 4. **Verification criteria** — concrete enough that an executor can self-check a
    one-shot attempt within a token budget: how it knows it succeeded.
@@ -136,6 +138,11 @@ starts at the `idea` lifecycle with an empty board and no git representation:
 ```
 clutch task new --title "<title>" [--mode cruise|steer] [--base <ref>] --yes
 ```
+
+The confirmation JSON returns the new id as `task_id` (alongside
+`action: "task-new"` and `status: "ok"`). Capture that `task_id` — it is the id
+you pass to every subsequent `clutch task <id>` / `clutch board <id>` read and
+write for this task.
 
 ## Lifecycle effect — you state it, you never write it
 
