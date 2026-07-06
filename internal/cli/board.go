@@ -44,5 +44,8 @@ func runBoard(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// The contract's machine shape renders each documented board array as [],
+	// never null.
+	normalizeBoard(board)
 	return emitBoard(cmd, board)
 }

@@ -69,6 +69,11 @@ func TestGoldenE2E(t *testing.T) {
 		if err := fillIdentity(res.Tasks, backend); err != nil {
 			t.Fatalf("fillIdentity: %v", err)
 		}
+		// Coerce empty arrays to [] exactly as project() does, so the contract's
+		// arrays-never-null rule is exercised end-to-end.
+		for i := range res.Tasks {
+			normalizeTask(&res.Tasks[i])
+		}
 		// GeneratedAt and scan duration are the only non-deterministic envelope
 		// inputs (a wall clock); freeze both so the two renders stay
 		// byte-identical, mirroring how project() reads the clock in one place.
@@ -168,6 +173,17 @@ func TestGoldenE2E(t *testing.T) {
 		}
 		if tk.Mode != model.ModeSteer {
 			t.Errorf("task %s mode = %q, want steer", tk.ID, tk.Mode)
+		}
+		// Arrays-never-null: every contract-documented per-task array must
+		// round-trip as a non-nil slice (a null would unmarshal back to nil).
+		// The fixtures leave prs/issues/sessions/lineage/relations empty, so
+		// these directly catch a regressed [] → null.
+		if tk.Repos == nil || tk.Branches == nil || tk.Worktrees == nil ||
+			tk.PRs == nil || tk.Issues == nil || tk.Sessions == nil ||
+			tk.Links == nil || tk.Unresolved == nil ||
+			tk.Lineage.Parents == nil ||
+			tk.Relations.Depends == nil || tk.Relations.Blocks == nil {
+			t.Errorf("task %s has a null array (want [] for all documented arrays): %+v", tk.ID, tk)
 		}
 		if len(tk.Branches) != 1 {
 			t.Errorf("task %s has %d branches, want 1", tk.ID, len(tk.Branches))

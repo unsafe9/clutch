@@ -64,9 +64,13 @@ func project() (model.ProjectionEnvelope, error) {
 		return model.ProjectionEnvelope{}, err
 	}
 	generatedAt := time.Now()
-	// The contract's machine shape renders empty collections as [], never null.
+	// The contract's machine shape renders empty collections as [], never null —
+	// both the top-level Tasks slice and every documented array within each Task.
 	if tasks == nil {
 		tasks = []model.Task{}
+	}
+	for i := range tasks {
+		normalizeTask(&tasks[i])
 	}
 	return model.ProjectionEnvelope{
 		SchemaVersion: model.SchemaVersion,

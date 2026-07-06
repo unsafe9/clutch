@@ -276,6 +276,14 @@ whose `cwd` matched no discovered repo/worktree; sessions whose `cwd` lies outsi
 every search root are dropped, never flagged — they are permanent noise the
 classify layer cannot act on.
 
+**Arrays are never null.** Every array documented in this contract renders as `[]`
+when empty, never `null` — at the envelope level (`tasks`,
+`diagnostics.unresolved`) and within each Task (`repos`, `branches`, `worktrees`,
+`prs`, `issues`, `sessions`, `links`, `unresolved`, `lineage.parents`,
+`relations.depends`, `relations.blocks`) and Board (`adrs`, `appraisals`,
+`adrs[].alternatives`). Fields marked `?` (e.g. `Unresolved.refs`) are optional
+and are omitted when absent rather than emitted as `null`.
+
 ---
 
 ## Schema versioning policy
