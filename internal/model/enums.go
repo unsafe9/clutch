@@ -64,11 +64,12 @@ type UnresolvedKind string
 
 // UnresolvedKind values.
 const (
-	UnresolvedLineage  UnresolvedKind = "lineage"
-	UnresolvedRelation UnresolvedKind = "relation"
-	UnresolvedLink     UnresolvedKind = "link"
-	UnresolvedIdentity UnresolvedKind = "identity"
-	UnresolvedSession  UnresolvedKind = "session"
+	UnresolvedLineage        UnresolvedKind = "lineage"
+	UnresolvedRelation       UnresolvedKind = "relation"
+	UnresolvedLink           UnresolvedKind = "link"
+	UnresolvedIdentity       UnresolvedKind = "identity"
+	UnresolvedSession        UnresolvedKind = "session"
+	UnresolvedClassification UnresolvedKind = "classification"
 )
 
 // AppraisalKind categorizes a cached Appraisal result. The set is extensible —

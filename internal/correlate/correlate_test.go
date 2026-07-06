@@ -796,6 +796,95 @@ func TestInitiatedTaskPlannedFromDesign(t *testing.T) {
 	}
 }
 
+func TestUndivergedBranchEmitsClassificationFlag(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/fresh"}, "T-fresh")
+	obs := model.Observations{Git: []model.GitObservation{
+		undivergedBranchObs("acme/app", "/repos/app", "feature/fresh"),
+	}}
+	// No board design, no appraisal: the ambiguity is unresolved.
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	tk := res.Tasks[0]
+	// The deterministic default is kept — the flag is the signal, not an override.
+	if tk.Lifecycle != model.LifecycleMerged {
+		t.Fatalf("lifecycle = %q, want merged (deterministic default kept)", tk.Lifecycle)
+	}
+	var flags []model.Unresolved
+	for _, u := range tk.Unresolved {
+		if u.Kind == model.UnresolvedClassification {
+			flags = append(flags, u)
+		}
+	}
+	if len(flags) != 1 {
+		t.Fatalf("want exactly 1 classification flag, got %d: %+v", len(flags), tk.Unresolved)
+	}
+	f := flags[0]
+	if f.TaskID != "T-fresh" {
+		t.Errorf("flag task_id = %q, want T-fresh", f.TaskID)
+	}
+	wantRef := model.RepRef("branch:acme/app/feature/fresh")
+	if len(f.Refs) != 1 || f.Refs[0] != wantRef {
+		t.Errorf("flag refs = %+v, want [%q]", f.Refs, wantRef)
+	}
+	if f.Detail == "" {
+		t.Errorf("flag detail must explain the ambiguity, got empty")
+	}
+}
+
+func TestFoldedClassificationSuppressesFlag(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/fresh"}, "T-fresh")
+	obs := model.Observations{Git: []model.GitObservation{
+		undivergedBranchObs("acme/app", "/repos/app", "feature/fresh"),
+	}}
+	appr := fakeAppraisals{byID: map[string][]model.Appraisal{
+		"T-fresh": {{Kind: model.AppraisalClassification, Subject: "task:T-fresh", Result: "active", Confidence: 0.9}},
+	}}
+	res, err := Correlate(obs, ids, appr, fakeDesigns{}, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	tk := res.Tasks[0]
+	if tk.Lifecycle != model.LifecycleActive {
+		t.Fatalf("lifecycle = %q, want active (folded classification)", tk.Lifecycle)
+	}
+	// A folded classification verdict suppresses the flag so classify does not
+	// re-judge the task every scan.
+	for _, u := range tk.Unresolved {
+		if u.Kind == model.UnresolvedClassification {
+			t.Fatalf("classification flag not suppressed by folded appraisal: %+v", tk.Unresolved)
+		}
+	}
+}
+
+func TestDivergedBranchEmitsNoClassificationFlag(t *testing.T) {
+	ids := newFakeIDs()
+	ids.seed(model.Signature{Repo: "acme/app", Branch: "feature/x"}, "T-x")
+	obs := model.Observations{Git: []model.GitObservation{
+		{
+			Repo: model.RepoRef{Identity: "acme/app", Path: "/repos/app"},
+			Branches: []model.Branch{{
+				Repo: "acme/app", Name: "feature/x", Head: "bbb", Base: "aaa",
+				Integration: model.IntegrationUnmerged,
+			}},
+		},
+	}}
+	res, err := Correlate(obs, ids, fakeAppraisals{}, fakeDesigns{}, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	tk := res.Tasks[0]
+	if tk.Lifecycle != model.LifecycleActive {
+		t.Fatalf("lifecycle = %q, want active (diverged branch)", tk.Lifecycle)
+	}
+	if len(tk.Unresolved) != 0 {
+		t.Fatalf("a diverged branch is not ambiguous; want no flag, got %+v", tk.Unresolved)
+	}
+}
+
 func TestDeterministicOrderingAcrossRuns(t *testing.T) {
 	build := func() Result {
 		ids := newFakeIDs()

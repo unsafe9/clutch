@@ -516,8 +516,9 @@ func (b *builder) finalize(appraisals AppraisalReader, designs DesignReader, ini
 		// means the task was planned, not merged. A merged PR or a cached
 		// classification appraisal is a definitive signal that pre-empts the
 		// heuristic.
+		undiverged := undivergedBranches(t)
 		ambiguous := t.Lifecycle == model.LifecycleMerged &&
-			len(undivergedBranches(t)) > 0 && !anyMergedPR(t)
+			len(undiverged) > 0 && !anyMergedPR(t)
 		hasDesign := false
 		if ambiguous && designs != nil {
 			has, err := designs.HasDesign(t.ID)
@@ -532,8 +533,23 @@ func (b *builder) finalize(appraisals AppraisalReader, designs DesignReader, ini
 			return nil, err
 		}
 
-		if ambiguous && !classified && hasDesign {
+		switch {
+		case !ambiguous || classified:
+			// A definitive derivation or classify's folded verdict already
+			// resolves the task: keep the lifecycle, emit no flag.
+		case hasDesign:
+			// The board design resolves the ambiguity: planned, not merged.
 			t.Lifecycle = model.LifecyclePlanned
+		default:
+			// Nothing resolves it: keep the deterministic `merged` default and flag
+			// the new-vs-merged ambiguity so `classify` can judge and persist a
+			// verdict, which suppresses this flag on later scans.
+			t.Unresolved = append(t.Unresolved, model.Unresolved{
+				Kind:   model.UnresolvedClassification,
+				Detail: "branch tip equals its merge-base with base: cannot distinguish a branch freshly cut at the base tip from a fully merged one; classify to resolve",
+				Refs:   undiverged,
+				TaskID: t.ID,
+			})
 		}
 
 		sortReps(t)

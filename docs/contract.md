@@ -190,7 +190,7 @@ them stable.
 | Provenance     | `clutch-initiated` `git-detected`                                       |
 | Integration    | `unmerged` `merged` `conflicts` `behind`                                |
 | LinkMethod     | `convention` `appraisal` `declared`                                     |
-| UnresolvedKind | `lineage` `relation` `link` `identity` `session` — **extensible**       |
+| UnresolvedKind | `lineage` `relation` `link` `identity` `session` `classification` — **extensible** |
 | AppraisalKind  | `classification` `relation` `link` — **extensible**                    |
 
 `UnresolvedKind` and `AppraisalKind` sets are **extensible**: consumers MUST
@@ -219,11 +219,18 @@ identical. Such a task has **no git activity of its own**. The board resolves it
   clutch-initiated task, **or** an undiverged branch (no merged PR) — whose board
   carries a **non-empty design** derives `planned`: it has been planned, not
   merged. A registry-only task **without** a design stays `idea`.
+- **`classification` unresolved flag.** An undiverged branch with **no** board
+  design and **no** folded classification appraisal keeps the deterministic
+  `merged` default and emits a `classification`-kind `unresolved` flag (`refs` =
+  the undiverged branch RepRef(s)) so the `classify` orchestrator judges the
+  new-vs-merged call and persists a verdict. The flag is **suppressed** once a
+  design makes it `planned` or a classification appraisal is folded — otherwise
+  classify would re-judge the task every scan.
 
 **Appraisal override.** A folded classification appraisal is classify's explicit
 verdict and **wins over both** the deterministic default and the `planned`
-heuristic (it sets `lifecycle` directly). A merged PR is likewise definitive and
-is never treated as the ambiguous case.
+heuristic (it sets `lifecycle` directly) and suppresses the flag. A merged PR is
+likewise definitive and is never treated as the ambiguous case.
 
 Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 `internal/model/board.go`.)
