@@ -141,6 +141,35 @@ Convention/declared imply confidence 1.0; appraisal < 1.0.
   `mode`) are written by the agent layer, and **those persist to the board** to
   avoid recomputation.
 
+### Task creation & provenance
+
+`provenance` records the task's birth path, and there are two:
+
+- **git-detected** — the deterministic scan discovers a representation
+  (branch / PR / issue / repo) and correlation mints or reuses an id anchored to
+  its signature. Class ① is re-derived from observations every scan.
+- **clutch-initiated** — created directly through the CLI, the primitive for
+  clutch-initiated work that starts before any git representation exists:
+
+  ```
+  clutch task new --title <title> [--mode cruise|steer] [--base <ref>] --yes
+  ```
+
+  It is a **mutating** action, so it passes the safety gate (`--yes` /
+  `CLUTCH_ASSUME_YES`). It mints an id through the **same IDRegistry** as
+  scan-discovered tasks but anchors **no signature yet** (it has no
+  representation). Its Class ① identity/policy — `title`, optional `mode`/`base`,
+  and `created` — is **persisted** in the registry and folded into every
+  subsequent `scan` / `tasks` projection as a **registry-only** task (empty
+  Class ②). Each invocation mints a distinct id; the title is a label, not a key.
+
+  A clutch-initiated task **starts at the `idea` lifecycle**. (Board-driven
+  derivation to `planned` is added in a later phase.) When a later scan discovers
+  a branch that correlates to the task, that branch's signature is meant to
+  attach to the same id so the representations join it — this attach-by-convention
+  linkage is **not yet implemented**, so until then a clutch-initiated task and a
+  later-created branch project as separate ids.
+
 ---
 
 ## Enums
@@ -221,6 +250,13 @@ Besides the signature→id anchoring, the registry persists per-id **identity
 metadata** — `created` / `updated` timestamps, the `updated` fingerprint, and the
 stored `mode` — read back each scan to fill the projection's Class-① fields (see
 *Class ① → created/updated derivation* and *mode — stored vs. effective*).
+
+**Clutch-initiated ids:** an id may be minted with **zero signatures anchored** —
+a `clutch task new` task has an identity before it has any representation. The
+backend persists that task's Class ① identity/policy beside the signature index
+and lists it back so correlation can materialize it (see *Task creation &
+provenance*). A correlating signature is attached later, once a representation
+appears.
 
 **Vanished-representation behavior:** when a previously-anchored signature stops
 appearing in scans, the id is **retained** (board history is the knowledge
