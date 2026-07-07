@@ -92,7 +92,22 @@ func emitHumanBoard(w io.Writer, b *model.Board) error {
 	if _, err := fmt.Fprintf(w, "Design:\n%s\n\n", b.Design); err != nil {
 		return err
 	}
-	if _, err := io.WriteString(w, "ADRs:\n"); err != nil {
+	if _, err := io.WriteString(w, "Questions:\n"); err != nil {
+		return err
+	}
+	for _, q := range b.Questions {
+		if q.Status == model.QuestionOpen {
+			if _, err := fmt.Fprintf(w, "  - #%d [%s] %s\n", q.ID, q.Status, q.Text); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "  - #%d [%s] %s -> %s\n",
+			q.ID, q.Status, q.Text, q.Resolution); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(w, "\nADRs:\n"); err != nil {
 		return err
 	}
 	for _, a := range b.ADRs {

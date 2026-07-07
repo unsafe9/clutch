@@ -14,7 +14,7 @@ import (
 func newBoardCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "board <task-id>",
-		Short: "Show a task's board (principles/design/adrs/appraisals)",
+		Short: "Show a task's board (principles/design/questions/adrs/appraisals)",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runBoard,
 	}
@@ -24,6 +24,8 @@ func newBoardCmd() *cobra.Command {
 		newAddDecisionCmd(),
 		newAddADRCmd(),
 		newAppraiseCmd(),
+		newAddQuestionCmd(),
+		newResolveQuestionCmd(),
 	)
 	return cmd
 }

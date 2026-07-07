@@ -50,6 +50,9 @@ func normalizeTask(t *model.Task) {
 // normalizeBoard ensures every contract-documented array on a Board marshals as
 // [] rather than null.
 func normalizeBoard(b *model.Board) {
+	if b.Questions == nil {
+		b.Questions = []model.Question{}
+	}
 	if b.ADRs == nil {
 		b.ADRs = []model.ADR{}
 	}

@@ -23,6 +23,13 @@ type BoardStore interface {
 	// it is appended. board.Appraisals is kept deterministically ordered on
 	// write (by Kind then Subject).
 	AddAppraisal(taskID string, a model.Appraisal) error
+	// AddQuestion appends an open design question with a 1-based id (max
+	// existing id + 1) and returns that id.
+	AddQuestion(taskID, text string) (int, error)
+	// ResolveQuestion closes question id: status resolved (or deferred when
+	// deferred=true), with the given resolution. Re-resolving an already-closed
+	// question overwrites it; an unknown id is an error.
+	ResolveQuestion(taskID string, id int, resolution string, deferred bool) error
 	// Query runs a cross-board query for project knowledge (related tasks /
 	// prior decisions).
 	Query(q Query) (*QueryResult, error)

@@ -82,3 +82,13 @@ const (
 	AppraisalRelation       AppraisalKind = "relation"
 	AppraisalLink           AppraisalKind = "link"
 )
+
+// QuestionStatus is the state of an open design question.
+type QuestionStatus string
+
+// QuestionStatus values.
+const (
+	QuestionOpen     QuestionStatus = "open"
+	QuestionResolved QuestionStatus = "resolved"
+	QuestionDeferred QuestionStatus = "deferred"
+)

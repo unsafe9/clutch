@@ -207,3 +207,108 @@ func TestAddDecisionAndADRRequireFlags(t *testing.T) {
 		t.Fatal("add-adr without --decision = nil, want error")
 	}
 }
+
+func TestAddQuestionThenResolveReadFlow(t *testing.T) {
+	store := t.TempDir()
+
+	// Three questions.
+	for _, text := range []string{"which backend?", "how to key sessions?", "which timezone?"} {
+		if _, err := execCmd(t, store, "board", "add-question", "taskQ",
+			"--text", text, "--yes"); err != nil {
+			t.Fatalf("add-question %q: %v", text, err)
+		}
+	}
+
+	// Resolve #1, defer #2, leave #3 open.
+	if _, err := execCmd(t, store, "board", "resolve-question", "taskQ",
+		"--id", "1", "--resolution", "the file store", "--yes"); err != nil {
+		t.Fatalf("resolve-question: %v", err)
+	}
+	if _, err := execCmd(t, store, "board", "resolve-question", "taskQ",
+		"--id", "2", "--resolution", "out of scope", "--defer", "--yes"); err != nil {
+		t.Fatalf("resolve-question --defer: %v", err)
+	}
+
+	// JSON read: three questions, 1-based ids, resolved/deferred/open statuses.
+	out, err := execCmd(t, store, "board", "taskQ", "--json")
+	if err != nil {
+		t.Fatalf("board read json: %v", err)
+	}
+	var b model.Board
+	if err := json.Unmarshal([]byte(out), &b); err != nil {
+		t.Fatalf("unmarshal board: %v\n%s", err, out)
+	}
+	if len(b.Questions) != 3 {
+		t.Fatalf("questions = %d, want 3\n%s", len(b.Questions), out)
+	}
+	if b.Questions[0].ID != 1 || b.Questions[0].Status != model.QuestionResolved ||
+		b.Questions[0].Resolution != "the file store" {
+		t.Fatalf("q1 = %+v", b.Questions[0])
+	}
+	if b.Questions[1].ID != 2 || b.Questions[1].Status != model.QuestionDeferred ||
+		b.Questions[1].Resolution != "out of scope" {
+		t.Fatalf("q2 = %+v", b.Questions[1])
+	}
+	if b.Questions[2].ID != 3 || b.Questions[2].Status != model.QuestionOpen {
+		t.Fatalf("q3 = %+v", b.Questions[2])
+	}
+
+	// Human read: the Questions section renders open and closed forms.
+	human, err := execCmd(t, store, "board", "taskQ")
+	if err != nil {
+		t.Fatalf("board read human: %v", err)
+	}
+	for _, want := range []string{
+		"Questions:",
+		"- #1 [resolved] which backend? -> the file store",
+		"- #2 [deferred] how to key sessions? -> out of scope",
+		"- #3 [open] which timezone?",
+	} {
+		if !strings.Contains(human, want) {
+			t.Errorf("human board missing %q:\n%s", want, human)
+		}
+	}
+}
+
+func TestQuestionCommandsRequireFlags(t *testing.T) {
+	store := t.TempDir()
+
+	// add-question requires --text.
+	if _, err := execCmd(t, store, "board", "add-question", "t", "--yes"); err == nil {
+		t.Fatal("add-question without --text = nil, want error")
+	}
+	// resolve-question requires --id > 0.
+	if _, err := execCmd(t, store, "board", "resolve-question", "t",
+		"--resolution", "x", "--yes"); err == nil {
+		t.Fatal("resolve-question without --id = nil, want error")
+	}
+	if _, err := execCmd(t, store, "board", "resolve-question", "t",
+		"--id", "0", "--resolution", "x", "--yes"); err == nil {
+		t.Fatal("resolve-question with --id 0 = nil, want error")
+	}
+	// resolve-question requires --resolution.
+	if _, err := execCmd(t, store, "board", "resolve-question", "t",
+		"--id", "1", "--yes"); err == nil {
+		t.Fatal("resolve-question without --resolution = nil, want error")
+	}
+	// Unknown id surfaces the store's not-found error.
+	if _, err := execCmd(t, store, "board", "add-question", "t", "--text", "q", "--yes"); err != nil {
+		t.Fatalf("seed add-question: %v", err)
+	}
+	if _, err := execCmd(t, store, "board", "resolve-question", "t",
+		"--id", "99", "--resolution", "x", "--yes"); err == nil {
+		t.Fatal("resolve-question with unknown id = nil, want error")
+	}
+}
+
+func TestQuestionWritesWithoutYesRejected(t *testing.T) {
+	store := t.TempDir()
+
+	if _, err := execCmd(t, store, "board", "add-question", "t", "--text", "q"); err == nil {
+		t.Fatal("add-question without --yes = nil, want rejection")
+	}
+	if _, err := execCmd(t, store, "board", "resolve-question", "t",
+		"--id", "1", "--resolution", "x"); err == nil {
+		t.Fatal("resolve-question without --yes = nil, want rejection")
+	}
+}

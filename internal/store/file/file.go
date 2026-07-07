@@ -218,6 +218,70 @@ func (s *Store) AddAppraisal(taskID string, a model.Appraisal) error {
 	})
 }
 
+// AddQuestion implements store.BoardStore: append an open design question with
+// a 1-based id (max existing id + 1) and a Created stamp from the store clock.
+// Returns the new question's id.
+func (s *Store) AddQuestion(taskID, text string) (int, error) {
+	var newID int
+	err := s.mutateBoard(taskID, func(b *model.Board) {
+		newID = maxQuestionID(b.Questions) + 1
+		b.Questions = append(b.Questions, model.Question{
+			ID:      newID,
+			Text:    text,
+			Status:  model.QuestionOpen,
+			Created: s.now().UTC(),
+		})
+	})
+	if err != nil {
+		return 0, err
+	}
+	return newID, nil
+}
+
+// ResolveQuestion implements store.BoardStore: close question id on taskID,
+// setting its status to resolved (or deferred when deferred=true), its
+// resolution, and a Resolved stamp from the store clock. Re-resolving an
+// already-closed question overwrites it (a recomputation supersedes, matching
+// the appraisal-upsert spirit); an unknown id is an error. It does not write
+// the board on the not-found path.
+func (s *Store) ResolveQuestion(taskID string, id int, resolution string, deferred bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := s.Get(taskID)
+	if err != nil {
+		return err
+	}
+	idx := -1
+	for i := range b.Questions {
+		if b.Questions[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("question %d not found on task %q", id, taskID)
+	}
+	status := model.QuestionResolved
+	if deferred {
+		status = model.QuestionDeferred
+	}
+	b.Questions[idx].Status = status
+	b.Questions[idx].Resolution = resolution
+	b.Questions[idx].Resolved = s.now().UTC()
+	return writeJSONAtomic(s.boardPath(taskID), b)
+}
+
+// maxQuestionID returns the highest question id in qs, or 0 when qs is empty.
+func maxQuestionID(qs []model.Question) int {
+	max := 0
+	for _, q := range qs {
+		if q.ID > max {
+			max = q.ID
+		}
+	}
+	return max
+}
+
 // mutateBoard does an atomic read-modify-write of one task board.
 func (s *Store) mutateBoard(taskID string, fn func(*model.Board)) error {
 	s.mu.Lock()

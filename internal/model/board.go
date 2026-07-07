@@ -18,6 +18,9 @@ type Board struct {
 	// Design is the evolving design that converges to final; decisions
 	// overwrite/accumulate. Engineering altitude, NO code.
 	Design string `json:"design"`
+	// Questions are open design unknowns the planner must close (or explicitly
+	// defer) before the plan is declared complete.
+	Questions []Question `json:"questions"`
 	// ADRs are architecture decision records.
 	ADRs []ADR `json:"adrs"`
 	// Appraisals cache classify / inferred-relation results to avoid
@@ -37,6 +40,18 @@ type ADR struct {
 type Decision struct {
 	Summary string `json:"summary"`
 	Detail  string `json:"detail"`
+}
+
+// Question is an open design unknown the planner must close (or explicitly
+// defer) before the plan is declared complete. Reopening is not modeled: a new
+// concern is a new question.
+type Question struct {
+	ID         int            `json:"id"`
+	Text       string         `json:"text"`
+	Status     QuestionStatus `json:"status"`
+	Resolution string         `json:"resolution,omitempty"`
+	Created    time.Time      `json:"created"`
+	Resolved   time.Time      `json:"resolved,omitempty"`
 }
 
 // Appraisal is a cached result of a classify / inferred-relation computation.

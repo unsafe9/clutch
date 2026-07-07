@@ -38,7 +38,7 @@ func TestNormalizeBoardArraysRenderEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"appraisals":[]`, `"alternatives":[]`} {
+	for _, want := range []string{`"questions":[]`, `"appraisals":[]`, `"alternatives":[]`} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("normalized board JSON missing %s:\n%s", want, data)
 		}

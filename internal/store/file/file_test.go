@@ -329,6 +329,104 @@ func TestAppraisalsReadBack(t *testing.T) {
 	}
 }
 
+func TestQuestionAddResolveDeferRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return clock }
+
+	// Ids are 1-based and monotonic: first is 1, second is 2.
+	id1, err := s.AddQuestion("t", "which store backend?")
+	if err != nil || id1 != 1 {
+		t.Fatalf("AddQuestion #1 = %d, %v; want 1, nil", id1, err)
+	}
+	id2, err := s.AddQuestion("t", "how to key sessions?")
+	if err != nil || id2 != 2 {
+		t.Fatalf("AddQuestion #2 = %d, %v; want 2, nil", id2, err)
+	}
+
+	// Resolve #1, defer #2.
+	if err := s.ResolveQuestion("t", 1, "the file store", false); err != nil {
+		t.Fatalf("ResolveQuestion(1): %v", err)
+	}
+	if err := s.ResolveQuestion("t", 2, "out of scope for now", true); err != nil {
+		t.Fatalf("ResolveQuestion(2, defer): %v", err)
+	}
+
+	// Ids stay monotonic across resolves: a third question is #3, not a reuse.
+	id3, err := s.AddQuestion("t", "which timezone?")
+	if err != nil || id3 != 3 {
+		t.Fatalf("AddQuestion #3 = %d, %v; want 3, nil", id3, err)
+	}
+
+	// Read back on a fresh Store (persistence across restarts).
+	s2 := New(root)
+	b, err := s2.Get("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Questions) != 3 {
+		t.Fatalf("questions = %d, want 3: %+v", len(b.Questions), b.Questions)
+	}
+	q1, q2, q3 := b.Questions[0], b.Questions[1], b.Questions[2]
+	if q1.Status != model.QuestionResolved || q1.Resolution != "the file store" {
+		t.Errorf("q1 = %+v, want resolved with resolution", q1)
+	}
+	if !q1.Created.Equal(clock) || !q1.Resolved.Equal(clock) {
+		t.Errorf("q1 created/resolved = %v/%v, want %v", q1.Created, q1.Resolved, clock)
+	}
+	if q2.Status != model.QuestionDeferred || q2.Resolution != "out of scope for now" {
+		t.Errorf("q2 = %+v, want deferred with reason", q2)
+	}
+	// An unresolved question keeps status open and a zero Resolved time.
+	if q3.Status != model.QuestionOpen || q3.Resolution != "" || !q3.Resolved.IsZero() {
+		t.Errorf("q3 = %+v, want open, no resolution, zero resolved", q3)
+	}
+}
+
+func TestResolveQuestionUnknownIDErrors(t *testing.T) {
+	s := New(t.TempDir())
+	if _, err := s.AddQuestion("t", "q"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResolveQuestion("t", 99, "x", false); err == nil {
+		t.Fatal("ResolveQuestion(unknown id) = nil, want error")
+	}
+	// A task with no board at all also errors (no question to resolve).
+	if err := s.ResolveQuestion("none", 1, "x", false); err == nil {
+		t.Fatal("ResolveQuestion(no board) = nil, want error")
+	}
+}
+
+func TestReResolveQuestionOverwrites(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return clock }
+
+	id, _ := s.AddQuestion("t", "q")
+	if err := s.ResolveQuestion("t", id, "first answer", false); err != nil {
+		t.Fatal(err)
+	}
+	// Re-resolve supersedes: overwrite the same question as deferred at a later
+	// clock, without appending a new one.
+	clock = clock.Add(time.Hour)
+	if err := s.ResolveQuestion("t", id, "actually defer this", true); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.Get("t")
+	if len(b.Questions) != 1 {
+		t.Fatalf("questions = %d, want 1 (re-resolve overwrites)", len(b.Questions))
+	}
+	q := b.Questions[0]
+	if q.Status != model.QuestionDeferred || q.Resolution != "actually defer this" {
+		t.Fatalf("re-resolve did not overwrite: %+v", q)
+	}
+	if !q.Resolved.Equal(clock) {
+		t.Fatalf("resolved = %v, want advanced to %v", q.Resolved, clock)
+	}
+}
+
 func TestHasDesign(t *testing.T) {
 	s := New(t.TempDir())
 

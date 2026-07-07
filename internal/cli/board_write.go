@@ -156,6 +156,67 @@ func newAddADRCmd() *cobra.Command {
 	return cmd
 }
 
+func newAddQuestionCmd() *cobra.Command {
+	var text string
+	cmd := &cobra.Command{
+		Use:   "add-question <task-id>",
+		Short: "Append an open design question to a task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gate(cmd, "board.write"); err != nil {
+				return err
+			}
+			if text == "" {
+				return fmt.Errorf("--text is required")
+			}
+			s, err := openStore()
+			if err != nil {
+				return err
+			}
+			if _, err := s.AddQuestion(args[0], text); err != nil {
+				return err
+			}
+			return emitConfirm(cmd, args[0], "add-question")
+		},
+	}
+	cmd.Flags().StringVar(&text, "text", "", "the open question (required)")
+	return cmd
+}
+
+func newResolveQuestionCmd() *cobra.Command {
+	var id int
+	var resolution string
+	var deferred bool
+	cmd := &cobra.Command{
+		Use:   "resolve-question <task-id>",
+		Short: "Resolve (or --defer) an open design question",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gate(cmd, "board.write"); err != nil {
+				return err
+			}
+			if id <= 0 {
+				return fmt.Errorf("--id is required and must be > 0")
+			}
+			if resolution == "" {
+				return fmt.Errorf("--resolution is required")
+			}
+			s, err := openStore()
+			if err != nil {
+				return err
+			}
+			if err := s.ResolveQuestion(args[0], id, resolution, deferred); err != nil {
+				return err
+			}
+			return emitConfirm(cmd, args[0], "resolve-question")
+		},
+	}
+	cmd.Flags().IntVar(&id, "id", 0, "the question id (required, > 0)")
+	cmd.Flags().StringVar(&resolution, "resolution", "", "the answer, or defer reason with --defer (required)")
+	cmd.Flags().BoolVar(&deferred, "defer", false, "mark the question deferred instead of resolved")
+	return cmd
+}
+
 func newAppraiseCmd() *cobra.Command {
 	var kind, subject, result, fingerprint string
 	var confidence float64
