@@ -51,7 +51,7 @@ type Question struct {
 	Status     QuestionStatus `json:"status"`
 	Resolution string         `json:"resolution,omitempty"`
 	Created    time.Time      `json:"created"`
-	Resolved   time.Time      `json:"resolved,omitempty"`
+	Resolved   time.Time      `json:"resolved"`
 }
 
 // Appraisal is a cached result of a classify / inferred-relation computation.

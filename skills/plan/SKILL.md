@@ -206,7 +206,7 @@ the board ready — read `clutch board <id> --json` and inspect `questions`:
 
 - If **any** question has `status: "open"`, you may **not** declare completion.
 - Close each one with an **evidence-backed** resolution
-  (`resolve-question <id> --id <n> --resolution "…" --yes`), or `--defer` with an
+  (`resolve-question <task-id> --id <n> --resolution "…" --yes`), or `--defer` with an
   honest reason when it genuinely does not block the design.
 - **Cruise has no human to interview**, so a question you cannot close from
   evidence is **not** deferred: leave it `open`, escalate to steer, and report it.
