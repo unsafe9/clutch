@@ -58,8 +58,10 @@ One flat object with relations.
 
 An abstract planning substrate. Per task, the board holds work principles, an
 evolving design that converges toward a final state (decisions overwrite or
-accumulate), and ADRs for the tradeoffs made along the way. The board is a
-*concept*, not a file format: a backend may be an in-repo file, an out-of-repo
+accumulate), and ADRs for the tradeoffs made along the way. It also tracks the
+design's **open questions** — the known unknowns — as first-class state, each of
+which must be resolved or explicitly deferred before planning is complete. The
+board is a *concept*, not a file format: a backend may be an in-repo file, an out-of-repo
 file, an HTML playground, an MCP-backed view, or anything else. Default backends
 keep planning out of commits (serving no-lock-in); promotion into the repo is an
 opt-in escape hatch. The queryable history across boards is what gives planning its

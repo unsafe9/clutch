@@ -199,6 +199,7 @@ them stable.
 | LinkMethod     | `convention` `appraisal` `declared`                                     |
 | UnresolvedKind | `lineage` `relation` `link` `identity` `session` `classification` — **extensible** |
 | AppraisalKind  | `classification` `relation` `link` — **extensible**                    |
+| QuestionStatus | `open` `resolved` `deferred`                                           |
 
 `UnresolvedKind` and `AppraisalKind` sets are **extensible**: consumers MUST
 tolerate kinds they do not recognize.
@@ -255,6 +256,7 @@ Durable per-task knowledge at engineering altitude — **NO code**. (Go:
 |--------------|---------------|-----------------------------------------------------------|
 | `principles` | string        | work principles for the task                              |
 | `design`     | string        | evolving design that converges to final; decisions overwrite/accumulate; engineering altitude, NO code |
+| `questions`  | []Question    | `{id, text, status, resolution?, created, resolved}` — open design unknowns; `status` is a `QuestionStatus` (see *Open questions*) |
 | `adrs`       | []ADR         | `{decision, context, alternatives[], consequence}`        |
 | `appraisals` | []Appraisal   | `{kind, subject, result, confidence, input_fingerprint, computed_at}` — cache of classify / inferred-relation results; `kind` is an `AppraisalKind`, `subject` is the RepRef appraised. `input_fingerprint` + `computed_at` are `classify`'s own cache-coherence token: on a later run it recomputes the fingerprint over the current inputs and, when it differs, re-appraises (upsert) to supersede the stale verdict. The deterministic core does **not** read `input_fingerprint` — it folds whichever verdict is cached — so invalidation is classify-driven, not core-side |
 
@@ -266,6 +268,41 @@ the appraised task's id. `relation` and `link` appraisals keep a **representatio
 **one** classification per task, and correlation folds it back by that subject.
 The CLI's `board appraise` **rejects** a `classification` whose `subject` is not
 `task:<task-id>` (the command's task argument).
+
+### Open questions
+
+`questions` promotes a design's **known unknowns** to first-class board state so
+planning can be mechanically gated on them, not tracked in prose. Each
+`Question` is `{id, text, status, resolution?, created, resolved}`; `status` is
+a `QuestionStatus` (`open` / `resolved` / `deferred`). Ids are **1-based** and
+monotonic per board (max existing id + 1); `created` / `resolved` are stamped
+from the store clock. `resolution` is omitted while a question is `open`;
+`resolved` is a `time.Time` and, like every other time field in this contract,
+is **not** omitted while unset — an open question renders its zero value
+(`0001-01-01T00:00:00Z`).
+
+Two mutating commands manage them, both behind the safety gate (`--yes` /
+`CLUTCH_ASSUME_YES`):
+
+- `clutch board add-question <task-id> --text "<question>" --yes` — append an
+  `open` question. `--text` is **required**. The confirmation is the standard
+  `{task_id, action, status}` object; it does **not** carry the new id — read
+  ids back via `clutch board <id> --json`.
+- `clutch board resolve-question <task-id> --id <n> --resolution "<answer>" [--defer] --yes`
+  — close question `<n>`: `resolved` by default, `deferred` with `--defer`.
+  `--id` (> 0) and `--resolution` are **required**; an unknown id is an error.
+  With `--defer`, `--resolution` carries the honest reason the question does not
+  block the design.
+
+Semantics: **re-resolving overwrites** the question's status/resolution/`resolved`
+(a recomputation supersedes, same spirit as the appraisal upsert). There is **no
+reopen** — a new concern is a **new question**.
+
+**Planning gate (SKILL-level convention).** `plan` must not declare a board's
+design complete while any question is `open`; it closes each by
+`resolve-question` (with an evidence-backed resolution, or `--defer` and a
+reason) first. Separately, during implementation, assumptions and plan
+deviations discovered while building are recorded via `board add-decision`.
 
 ### BoardStore port
 
@@ -281,6 +318,11 @@ The CLI's `board appraise` **rejects** a `classification` whose `subject` is not
   with fresh `input_fingerprint`/`computed_at`, supersedes it), else appended.
   `appraisals` is kept deterministically ordered on write (by `kind`, then
   `subject`).
+- `AddQuestion(taskID, text) -> id` — append an `open` design question; the
+  returned `id` is 1-based (max existing id + 1).
+- `ResolveQuestion(taskID, id, resolution, deferred)` — close question `id`
+  (`resolved`, or `deferred` when `deferred` is set), stamping `resolution` and
+  `resolved`. Re-resolving overwrites; an unknown id is an error.
 - `Query(Query{text, task_ids?}) -> QueryResult{tasks[], decisions[], adrs[]}`
   — cross-board query → related tasks / prior decisions = project knowledge.
 
@@ -378,9 +420,10 @@ classify layer cannot act on.
 when empty, never `null` — at the envelope level (`tasks`,
 `diagnostics.unresolved`) and within each Task (`repos`, `branches`, `worktrees`,
 `prs`, `issues`, `sessions`, `links`, `unresolved`, `lineage.parents`,
-`relations.depends`, `relations.blocks`) and Board (`adrs`, `appraisals`,
-`adrs[].alternatives`). Fields marked `?` (e.g. `Unresolved.refs`) are optional
-and are omitted when absent rather than emitted as `null`.
+`relations.depends`, `relations.blocks`) and Board (`questions`, `adrs`,
+`appraisals`, `adrs[].alternatives`). Fields marked `?` (e.g. `Unresolved.refs`,
+`Question.resolution`) are optional and are omitted when absent rather than
+emitted as `null`.
 
 ---
 
